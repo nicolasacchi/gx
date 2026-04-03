@@ -78,6 +78,29 @@ gx board list
 gx board fields --project-number 1
 ```
 
+### items add/archive (GraphQL)
+```bash
+gx items add 123 --project-number 1                 # add issue to project board
+gx items archive 123 --project-number 1              # archive done item
+```
+
+### issues timeline, linked-prs, pin, lock (REST + GraphQL)
+```bash
+gx issues timeline 123 --limit 20                    # event history (like jx changelog)
+gx issues linked-prs 123                             # PRs that reference/close this issue
+gx issues pin 123                                    # pin issue
+gx issues unpin 123
+gx issues lock 123                                   # lock conversation
+gx issues unlock 123
+```
+
+### bulk (REST — batch operations)
+```bash
+gx bulk edit --label "type:bug" --add-label "must-do"
+gx bulk edit --milestone "v2.1" --add-label "ready"
+gx bulk close --label "sdd:problem" --reason "not_planned"
+```
+
 ### comments, labels, search, overview, config, open (REST)
 ```bash
 gx comments add 123 --file context.md
@@ -113,7 +136,7 @@ internal/
   client/graphql.go           GraphQL API: sub-issues, iterations, project fields
   client/errors.go            APIError with ExitCode()
   commands/root.go            Root command, global flags, auth
-  commands/*.go               One file per command group (14 groups)
+  commands/*.go               One file per command group (15 groups)
   config/config.go            TOML config, multi-project, gh auth token reuse
   output/output.go            JSON/table dispatcher, TTY detection
   output/table.go             go-pretty tables, column definitions

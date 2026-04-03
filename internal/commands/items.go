@@ -22,10 +22,17 @@ var (
 	itemsClear      bool
 )
 
+var itemsAddProjectNum int
+
 func init() {
 	rootCmd.AddCommand(itemsCmd)
+	itemsCmd.AddCommand(itemsAddCmd)
 	itemsCmd.AddCommand(itemsSetCmd)
 	itemsCmd.AddCommand(itemsClearCmd)
+	itemsCmd.AddCommand(itemsArchiveCmd)
+
+	itemsAddCmd.Flags().IntVar(&itemsAddProjectNum, "project-number", 0, "Project number (required)")
+	itemsAddCmd.MarkFlagRequired("project-number")
 
 	itemsSetCmd.Flags().IntVar(&itemsProjectNum, "project-number", 0, "Project number (required)")
 	itemsSetCmd.Flags().StringVar(&itemsStatus, "status", "", "Set status (e.g., 'In Progress')")
@@ -45,6 +52,50 @@ func init() {
 var itemsCmd = &cobra.Command{
 	Use:   "items",
 	Short: "Set project board fields on issues (auto-resolves IDs)",
+}
+
+var itemsAddCmd = &cobra.Command{
+	Use:   "add <issue-number>",
+	Short: "Add an issue to a project board",
+	Long: `Add an existing issue to a GitHub Project board.
+
+Examples:
+  gx items add 123 --project-number 1`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := getClient(cmd)
+		if err != nil {
+			return err
+		}
+		issueNum, err := parseNumber(args[0])
+		if err != nil {
+			return err
+		}
+
+		projectID, err := c.ProjectNodeID(context.Background(), itemsAddProjectNum)
+		if err != nil {
+			return err
+		}
+		issueID, err := c.IssueNodeID(context.Background(), issueNum)
+		if err != nil {
+			return err
+		}
+
+		query := fmt.Sprintf(`mutation {
+			addProjectV2ItemById(input: {projectId: %q, contentId: %q}) {
+				item { id }
+			}
+		}`, projectID, issueID)
+
+		data, err := c.GraphQL(context.Background(), query, nil)
+		if err != nil {
+			return err
+		}
+		if !quietFlag {
+			fmt.Fprintf(os.Stderr, "added #%d to project %d\n", issueNum, itemsAddProjectNum)
+		}
+		return printData("", data)
+	},
 }
 
 var itemsSetCmd = &cobra.Command{
@@ -179,6 +230,39 @@ var itemsClearCmd = &cobra.Command{
 		}
 		if !quietFlag {
 			fmt.Fprintf(os.Stderr, "cleared %s on #%d\n", itemsField, issueNum)
+		}
+		return nil
+	},
+}
+
+var itemsArchiveCmd = &cobra.Command{
+	Use:   "archive <issue-number>",
+	Short: "Archive a project item",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := getClient(cmd)
+		if err != nil {
+			return err
+		}
+		issueNum, _ := parseNumber(args[0])
+		projectID, err := c.ProjectNodeID(context.Background(), itemsProjectNum)
+		if err != nil {
+			return err
+		}
+		itemID, err := findProjectItemID(c, projectID, issueNum)
+		if err != nil {
+			return err
+		}
+		query := fmt.Sprintf(`mutation {
+			archiveProjectV2Item(input: {projectId: %q, itemId: %q}) {
+				item { id }
+			}
+		}`, projectID, itemID)
+		if _, err := c.GraphQL(context.Background(), query, nil); err != nil {
+			return err
+		}
+		if !quietFlag {
+			fmt.Fprintf(os.Stderr, "archived #%d from project\n", issueNum)
 		}
 		return nil
 	},

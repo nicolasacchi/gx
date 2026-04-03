@@ -138,6 +138,11 @@ func (c *Client) Patch(ctx context.Context, path string, body any) (json.RawMess
 	return c.doRequest(ctx, "PATCH", c.repoPath(path), body)
 }
 
+// Put performs a REST PUT request on a repo-scoped path.
+func (c *Client) Put(ctx context.Context, path string, body any) (json.RawMessage, error) {
+	return c.doRequest(ctx, "PUT", c.repoPath(path), body)
+}
+
 // Delete performs a REST DELETE request on a repo-scoped path.
 func (c *Client) Delete(ctx context.Context, path string) error {
 	_, err := c.doRequest(ctx, "DELETE", c.repoPath(path), nil)

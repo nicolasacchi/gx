@@ -63,12 +63,13 @@ gx overview
 
 | Group | Subcommands | API |
 |-------|-------------|-----|
-| `issues` | list, get, create, edit, close, reopen, assign | REST |
+| `issues` | list, get, create, edit, close, reopen, assign, timeline, linked-prs, pin/unpin, lock/unlock | REST + GraphQL |
 | `sub-issues` | list, add, remove, reorder | **GraphQL** |
 | `milestones` | list, get, create, edit, close, reopen, issues | REST |
 | `iterations` | list, current | **GraphQL** |
-| `items` | set, clear | **GraphQL** |
+| `items` | add, set, clear, archive | **GraphQL** |
 | `board` | list, fields | **GraphQL** |
+| `bulk` | edit, close | REST |
 | `comments` | list, add | REST |
 | `labels` | list, create, delete | REST |
 | `search` | (text + filters) | REST |
