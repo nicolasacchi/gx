@@ -400,20 +400,20 @@ func findProjectItemID(c *client.Client, projectID string, issueNum int) (string
 		return "", err
 	}
 
+	// Query the issue's projectItems directly — O(1) regardless of project size.
+	// This avoids the old approach of scanning all project items (which broke at >100).
 	query := fmt.Sprintf(`{
 		node(id: %q) {
-			... on ProjectV2 {
-				items(first: 100) {
+			... on Issue {
+				projectItems(first: 50) {
 					nodes {
 						id
-						content {
-							... on Issue { id }
-						}
+						project { id }
 					}
 				}
 			}
 		}
-	}`, projectID)
+	}`, issueID)
 
 	data, err := c.GraphQL(context.Background(), query, nil)
 	if err != nil {
@@ -422,20 +422,22 @@ func findProjectItemID(c *client.Client, projectID string, issueNum int) (string
 
 	var resp struct {
 		Node struct {
-			Items struct {
+			ProjectItems struct {
 				Nodes []struct {
 					ID      string `json:"id"`
-					Content struct {
+					Project struct {
 						ID string `json:"id"`
-					} `json:"content"`
+					} `json:"project"`
 				} `json:"nodes"`
-			} `json:"items"`
+			} `json:"projectItems"`
 		} `json:"node"`
 	}
-	json.Unmarshal(data, &resp)
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return "", fmt.Errorf("parse project items: %w", err)
+	}
 
-	for _, item := range resp.Node.Items.Nodes {
-		if item.Content.ID == issueID {
+	for _, item := range resp.Node.ProjectItems.Nodes {
+		if item.Project.ID == projectID {
 			return item.ID, nil
 		}
 	}
