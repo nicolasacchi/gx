@@ -84,6 +84,8 @@ gx items add 123 --project-number 1                 # add issue to project board
 gx items archive 123 --project-number 1              # archive done item
 ```
 
+`items add` and `sub-issues add` are silent on stdout on success — the GraphQL mutation response is suppressed unless `--json` or `--jq` is passed explicitly. The human-readable success line still prints to stderr (`added #X to project N` / `linked: #X → sub-issue of #Y`). This keeps script logs clean when looping over many issues. Same applies to `items set`/`clear`/`archive` and `sub-issues remove`/`reorder`, which were already silent.
+
 ### issues timeline, linked-prs, pin, lock (REST + GraphQL)
 ```bash
 gx issues timeline 123 --limit 20                    # event history (like jx changelog)

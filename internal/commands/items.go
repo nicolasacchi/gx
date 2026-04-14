@@ -94,7 +94,13 @@ Examples:
 		if !quietFlag {
 			fmt.Fprintf(os.Stderr, "added #%d to project %d\n", issueNum, itemsAddProjectNum)
 		}
-		return printData("", data)
+		// Only emit the mutation JSON to stdout if the caller explicitly asked for it
+		// via --json or --jq. Piped-stdout auto-JSON is not enough — scripts loop over
+		// many add calls and don't want every success polluting their log stream.
+		if jsonFlag || jqFlag != "" {
+			return printData("", data)
+		}
+		return nil
 	},
 }
 
