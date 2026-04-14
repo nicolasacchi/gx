@@ -209,7 +209,12 @@ Examples:
 		if !quietFlag {
 			fmt.Fprintf(os.Stderr, "linked: #%d → sub-issue of #%d\n", childNum, parentNum)
 		}
-		return printData("", data)
+		// Only emit the mutation JSON to stdout if the caller explicitly asked for it
+		// via --json or --jq. See itemsAddCmd for rationale.
+		if jsonFlag || jqFlag != "" {
+			return printData("", data)
+		}
+		return nil
 	},
 }
 
