@@ -14,19 +14,24 @@ import (
 )
 
 var (
-	issueState       string
-	issueLabel       []string
-	issueMilestone   string
-	issueAssignee    string
-	issueTitle       string
-	issueBody        string
-	issueBodyFile    string
-	issueType        string
-	issueParent      int
-	issueAddLabel    []string
-	issueRemLabel    []string
-	issueCloseReason string
-	issueUser        string
+	issueState           string
+	issueLabel           []string
+	issueMilestone       string
+	issueRemoveMilestone bool
+	issueAssignee        string
+	issueAssignees       []string
+	issueAddAssignee     []string
+	issueRemAssignee     []string
+	issueTitle           string
+	issueBody            string
+	issueBodyFile        string
+	issueType            string
+	issueEditState       string
+	issueParent          int
+	issueAddLabel        []string
+	issueRemLabel        []string
+	issueCloseReason     string
+	issueUser            string
 )
 
 func init() {
@@ -55,12 +60,21 @@ func init() {
 	issuesCreateCmd.Flags().StringVar(&issueBodyFile, "body-file", "", "Read body from file")
 	issuesCreateCmd.Flags().StringSliceVar(&issueLabel, "label", nil, "Labels")
 	issuesCreateCmd.Flags().StringVar(&issueMilestone, "milestone", "", "Milestone title")
-	issuesCreateCmd.Flags().StringVar(&issueAssignee, "assignee", "", "Assignee login")
+	issuesCreateCmd.Flags().StringSliceVar(&issueAssignees, "assignee", nil, "Assignee login(s); repeatable or comma-separated")
 	issuesCreateCmd.Flags().StringVar(&issueType, "type", "", "Issue type name (e.g. Task, Bug, Feature)")
 	issuesCreateCmd.Flags().IntVar(&issueParent, "parent", 0, "Parent issue number (creates as sub-issue)")
 	issuesCreateCmd.MarkFlagRequired("title")
 
 	issuesEditCmd.Flags().StringVar(&issueTitle, "title", "", "New title")
+	issuesEditCmd.Flags().StringVar(&issueBody, "body", "", "New body")
+	issuesEditCmd.Flags().StringVar(&issueBodyFile, "body-file", "", "Read new body from file")
+	issuesEditCmd.Flags().StringVar(&issueType, "type", "", "Set issue type name (e.g. Task, Bug, Feature)")
+	issuesEditCmd.Flags().StringVar(&issueMilestone, "milestone", "", "Set milestone by title")
+	issuesEditCmd.Flags().BoolVar(&issueRemoveMilestone, "remove-milestone", false, "Clear the milestone")
+	issuesEditCmd.Flags().StringVar(&issueEditState, "state", "", "Set state: open or closed")
+	issuesEditCmd.Flags().StringSliceVar(&issueAssignees, "assignee", nil, "Replace assignees with this set; repeatable or comma-separated")
+	issuesEditCmd.Flags().StringSliceVar(&issueAddAssignee, "add-assignee", nil, "Add assignees; repeatable")
+	issuesEditCmd.Flags().StringSliceVar(&issueRemAssignee, "remove-assignee", nil, "Remove assignees; repeatable")
 	issuesEditCmd.Flags().StringSliceVar(&issueAddLabel, "add-label", nil, "Add labels")
 	issuesEditCmd.Flags().StringSliceVar(&issueRemLabel, "remove-label", nil, "Remove labels")
 
@@ -164,8 +178,8 @@ Examples:
 		if len(issueLabel) > 0 {
 			fields["labels"] = issueLabel
 		}
-		if issueAssignee != "" {
-			fields["assignees"] = []string{issueAssignee}
+		if len(issueAssignees) > 0 {
+			fields["assignees"] = issueAssignees
 		}
 		if issueType != "" {
 			fields["type"] = issueType
@@ -225,7 +239,15 @@ Examples:
 var issuesEditCmd = &cobra.Command{
 	Use:   "edit <number>",
 	Short: "Edit an issue",
-	Args:  cobra.ExactArgs(1),
+	Long: `Edit an existing issue's fields. Any combination of flags may be set in one call.
+
+Examples:
+  gx issues edit 123 --title "New title" --type "Bug"
+  gx issues edit 123 --body-file notes.md --milestone "v2.1"
+  gx issues edit 123 --assignee alice --assignee bob       # replace assignee set
+  gx issues edit 123 --add-assignee carol --remove-assignee bob
+  gx issues edit 123 --state closed --add-label "done"`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := getClient(cmd)
 		if err != nil {
@@ -236,6 +258,39 @@ var issuesEditCmd = &cobra.Command{
 		if issueTitle != "" {
 			fields["title"] = issueTitle
 		}
+		body := issueBody
+		if issueBodyFile != "" {
+			content, err := os.ReadFile(issueBodyFile)
+			if err != nil {
+				return fmt.Errorf("read body file: %w", err)
+			}
+			body = string(content)
+		}
+		if body != "" {
+			fields["body"] = body
+		}
+		if issueType != "" {
+			fields["type"] = issueType
+		}
+		if issueEditState != "" {
+			if issueEditState != "open" && issueEditState != "closed" {
+				return fmt.Errorf("--state must be 'open' or 'closed', got %q", issueEditState)
+			}
+			fields["state"] = issueEditState
+		}
+		if issueRemoveMilestone {
+			fields["milestone"] = nil
+		} else if issueMilestone != "" {
+			milestoneNum, err := resolveMilestoneNumber(c, issueMilestone)
+			if err != nil {
+				return err
+			}
+			fields["milestone"] = milestoneNum
+		}
+		// --assignee replaces the whole assignee set (PATCH semantics).
+		if len(issueAssignees) > 0 {
+			fields["assignees"] = issueAssignees
+		}
 
 		if len(fields) > 0 {
 			if _, err := c.Patch(context.Background(), "issues/"+args[0], fields); err != nil {
@@ -243,8 +298,19 @@ var issuesEditCmd = &cobra.Command{
 			}
 		}
 
-		// Labels: add and remove
 		num, _ := parseNumber(args[0])
+		// Assignees: incremental add/remove via the dedicated sub-endpoints.
+		if len(issueAddAssignee) > 0 {
+			if _, err := c.Post(context.Background(), fmt.Sprintf("issues/%d/assignees", num), map[string]any{"assignees": issueAddAssignee}); err != nil {
+				return fmt.Errorf("add assignees: %w", err)
+			}
+		}
+		if len(issueRemAssignee) > 0 {
+			if _, err := c.DeleteBody(context.Background(), fmt.Sprintf("issues/%d/assignees", num), map[string]any{"assignees": issueRemAssignee}); err != nil {
+				return fmt.Errorf("remove assignees: %w", err)
+			}
+		}
+		// Labels: add and remove
 		for _, l := range issueAddLabel {
 			c.Post(context.Background(), fmt.Sprintf("issues/%d/labels", num), map[string]any{"labels": []string{l}})
 		}

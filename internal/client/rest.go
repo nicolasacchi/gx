@@ -49,7 +49,7 @@ func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if req.Method == http.MethodPost || req.Method == http.MethodPatch {
+	if req.Method == http.MethodPost || req.Method == http.MethodPatch || req.Method == http.MethodDelete {
 		req.Header.Set("Content-Type", "application/json")
 	}
 }
@@ -147,4 +147,10 @@ func (c *Client) Put(ctx context.Context, path string, body any) (json.RawMessag
 func (c *Client) Delete(ctx context.Context, path string) error {
 	_, err := c.doRequest(ctx, "DELETE", c.repoPath(path), nil)
 	return err
+}
+
+// DeleteBody performs a REST DELETE request with a JSON body (e.g. removing
+// assignees, which GitHub models as DELETE .../assignees with an assignees array).
+func (c *Client) DeleteBody(ctx context.Context, path string, body any) (json.RawMessage, error) {
+	return c.doRequest(ctx, "DELETE", c.repoPath(path), body)
 }

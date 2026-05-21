@@ -34,8 +34,12 @@ Resolution order (first non-empty wins):
 gx issues list --label "type:bug" --state open --milestone "v2.1"
 gx issues get 123
 gx issues create --title "Fix" --type "Bug" --label "type:bug" --milestone "v2.1"
+gx issues create --title "Multi" --assignee alice --assignee bob   # multiple assignees
 gx issues create --title "Sub-task" --type "Task" --parent 456    # create + link as sub-issue
-gx issues edit 123 --title "Updated" --add-label "must-do"
+gx issues edit 123 --title "Updated" --body-file notes.md --type "Bug" --milestone "v2.1"
+gx issues edit 123 --assignee alice --assignee bob   # replace assignee set
+gx issues edit 123 --add-assignee carol --remove-assignee bob --add-label "must-do"
+gx issues edit 123 --state closed
 gx issues close 123 --reason "not planned"
 gx issues assign 123 --user nicolasacchi
 ```
