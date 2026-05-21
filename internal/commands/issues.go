@@ -14,18 +14,19 @@ import (
 )
 
 var (
-	issueState     string
-	issueLabel     []string
-	issueMilestone string
-	issueAssignee  string
-	issueTitle     string
-	issueBody      string
-	issueBodyFile  string
-	issueParent    int
-	issueAddLabel  []string
-	issueRemLabel  []string
+	issueState       string
+	issueLabel       []string
+	issueMilestone   string
+	issueAssignee    string
+	issueTitle       string
+	issueBody        string
+	issueBodyFile    string
+	issueType        string
+	issueParent      int
+	issueAddLabel    []string
+	issueRemLabel    []string
 	issueCloseReason string
-	issueUser      string
+	issueUser        string
 )
 
 func init() {
@@ -55,6 +56,7 @@ func init() {
 	issuesCreateCmd.Flags().StringSliceVar(&issueLabel, "label", nil, "Labels")
 	issuesCreateCmd.Flags().StringVar(&issueMilestone, "milestone", "", "Milestone title")
 	issuesCreateCmd.Flags().StringVar(&issueAssignee, "assignee", "", "Assignee login")
+	issuesCreateCmd.Flags().StringVar(&issueType, "type", "", "Issue type name (e.g. Task, Bug, Feature)")
 	issuesCreateCmd.Flags().IntVar(&issueParent, "parent", 0, "Parent issue number (creates as sub-issue)")
 	issuesCreateCmd.MarkFlagRequired("title")
 
@@ -83,9 +85,9 @@ var issuesListCmd = &cobra.Command{
 		}
 
 		params := url.Values{
-			"state":    {issueState},
-			"per_page": {strconv.Itoa(limitFlag)},
-			"sort":     {"updated"},
+			"state":     {issueState},
+			"per_page":  {strconv.Itoa(limitFlag)},
+			"sort":      {"updated"},
 			"direction": {"desc"},
 		}
 		if len(issueLabel) > 0 {
@@ -136,8 +138,8 @@ var issuesCreateCmd = &cobra.Command{
 	Long: `Create a GitHub issue. Optionally link as sub-issue with --parent.
 
 Examples:
-  gx issues create --title "Fix login bug" --label "type:bug"
-  gx issues create --title "Phase 1" --milestone "CoMarketing" --parent 456`,
+  gx issues create --title "Fix login bug" --type "Bug" --label "type:bug"
+  gx issues create --title "Phase 1" --type "Task" --milestone "CoMarketing" --parent 456`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := getClient(cmd)
 		if err != nil {
@@ -164,6 +166,9 @@ Examples:
 		}
 		if issueAssignee != "" {
 			fields["assignees"] = []string{issueAssignee}
+		}
+		if issueType != "" {
+			fields["type"] = issueType
 		}
 		// Milestone requires the milestone number, not title. Look it up.
 		if issueMilestone != "" {
@@ -418,16 +423,16 @@ Examples:
 		var rows []map[string]any
 		for _, raw := range resp.Repository.Issue.TimelineItems.Nodes {
 			var event struct {
-				TypeName      string `json:"__typename"`
-				Actor         *struct{ Login string } `json:"actor"`
-				CreatedAt     string `json:"createdAt"`
-				Label         *struct{ Name string } `json:"label"`
-				Assignee      *struct{ Login string } `json:"assignee"`
-				StateReason   string `json:"stateReason"`
-				PreviousTitle string `json:"previousTitle"`
-				CurrentTitle  string `json:"currentTitle"`
-				MilestoneTitle string `json:"milestoneTitle"`
-				Source        *struct {
+				TypeName       string                  `json:"__typename"`
+				Actor          *struct{ Login string } `json:"actor"`
+				CreatedAt      string                  `json:"createdAt"`
+				Label          *struct{ Name string }  `json:"label"`
+				Assignee       *struct{ Login string } `json:"assignee"`
+				StateReason    string                  `json:"stateReason"`
+				PreviousTitle  string                  `json:"previousTitle"`
+				CurrentTitle   string                  `json:"currentTitle"`
+				MilestoneTitle string                  `json:"milestoneTitle"`
+				Source         *struct {
 					Number int    `json:"number"`
 					Title  string `json:"title"`
 					State  string `json:"state"`

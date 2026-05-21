@@ -33,8 +33,8 @@ Resolution order (first non-empty wins):
 ```bash
 gx issues list --label "type:bug" --state open --milestone "v2.1"
 gx issues get 123
-gx issues create --title "Fix" --label "type:bug" --milestone "v2.1"
-gx issues create --title "Sub-task" --parent 456    # create + link as sub-issue
+gx issues create --title "Fix" --type "Bug" --label "type:bug" --milestone "v2.1"
+gx issues create --title "Sub-task" --type "Task" --parent 456    # create + link as sub-issue
 gx issues edit 123 --title "Updated" --add-label "must-do"
 gx issues close 123 --reason "not planned"
 gx issues assign 123 --user nicolasacchi
