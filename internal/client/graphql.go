@@ -8,7 +8,8 @@ import (
 	"strings"
 )
 
-const graphqlURL = "https://api.github.com/graphql"
+// graphqlURL is a var (not const) so tests can point it at an httptest server.
+var graphqlURL = "https://api.github.com/graphql"
 
 // GraphQL executes a GraphQL query/mutation and returns the data field.
 func (c *Client) GraphQL(ctx context.Context, query string, variables map[string]any) (json.RawMessage, error) {

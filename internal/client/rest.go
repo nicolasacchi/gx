@@ -14,8 +14,10 @@ import (
 	"time"
 )
 
+// baseURL is a var (not const) so tests can point it at an httptest server.
+var baseURL = "https://api.github.com"
+
 const (
-	baseURL    = "https://api.github.com"
 	timeout    = 30 * time.Second
 	maxRetries = 3
 	maxBackoff = 60 * time.Second

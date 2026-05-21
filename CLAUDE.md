@@ -189,5 +189,9 @@ secondary limit) is **not** retried — hammering a secondary limit only extends
 ```bash
 make build    # → bin/gx
 make install  # → ~/go/bin/gx
-make test     # → go test ./...
+make test     # → go test ./... (unit tests for client retry/error logic + command helpers)
 ```
+
+Tests live in `internal/*/`*_test.go` (no network — pure functions plus `httptest` for the
+retry loop and GraphQL envelope handling; `baseURL`/`graphqlURL` are vars so tests redirect
+them). CI (`.github/workflows/ci.yml`) runs build + vet + gofmt + test on push/PR.
