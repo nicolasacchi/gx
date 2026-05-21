@@ -31,7 +31,15 @@ var (
 	issueAddLabel        []string
 	issueRemLabel        []string
 	issueCloseReason     string
+	issueReopenReason    string
 	issueUser            string
+
+	// create --project-number board flags (custom fields reuse itemsFields/itemsValues)
+	createProjectNum int
+	createStatus     string
+	createPriority   string
+	createPoints     float64
+	createIteration  string
 )
 
 func init() {
@@ -39,6 +47,7 @@ func init() {
 	issuesCmd.AddCommand(issuesListCmd)
 	issuesCmd.AddCommand(issuesGetCmd)
 	issuesCmd.AddCommand(issuesCreateCmd)
+	issuesCmd.AddCommand(issuesTypesCmd)
 	issuesCmd.AddCommand(issuesEditCmd)
 	issuesCmd.AddCommand(issuesCloseCmd)
 	issuesCmd.AddCommand(issuesReopenCmd)
@@ -63,6 +72,13 @@ func init() {
 	issuesCreateCmd.Flags().StringSliceVar(&issueAssignees, "assignee", nil, "Assignee login(s); repeatable or comma-separated")
 	issuesCreateCmd.Flags().StringVar(&issueType, "type", "", "Issue type name (e.g. Task, Bug, Feature)")
 	issuesCreateCmd.Flags().IntVar(&issueParent, "parent", 0, "Parent issue number (creates as sub-issue)")
+	issuesCreateCmd.Flags().IntVar(&createProjectNum, "project-number", 0, "Add the new issue to this project board")
+	issuesCreateCmd.Flags().StringVar(&createStatus, "status", "", "Board Status (needs --project-number)")
+	issuesCreateCmd.Flags().StringVar(&createPriority, "priority", "", "Board Priority (needs --project-number)")
+	issuesCreateCmd.Flags().Float64Var(&createPoints, "points", 0, "Board Story Points (needs --project-number)")
+	issuesCreateCmd.Flags().StringVar(&createIteration, "iteration", "", "Board iteration/Sprint by title (needs --project-number)")
+	issuesCreateCmd.Flags().StringArrayVar(&itemsFields, "field", nil, "Board custom field name (repeatable; pair with --value; needs --project-number)")
+	issuesCreateCmd.Flags().StringArrayVar(&itemsValues, "value", nil, "Value for the matching --field (repeatable)")
 	issuesCreateCmd.MarkFlagRequired("title")
 
 	issuesEditCmd.Flags().StringVar(&issueTitle, "title", "", "New title")
@@ -79,6 +95,8 @@ func init() {
 	issuesEditCmd.Flags().StringSliceVar(&issueRemLabel, "remove-label", nil, "Remove labels")
 
 	issuesCloseCmd.Flags().StringVar(&issueCloseReason, "reason", "", "Close reason: completed, not_planned")
+
+	issuesReopenCmd.Flags().StringVar(&issueReopenReason, "reason", "reopened", "Reopen state_reason (default: reopened)")
 
 	issuesAssignCmd.Flags().StringVar(&issueUser, "user", "", "Assignee login (required)")
 	issuesAssignCmd.MarkFlagRequired("user")
@@ -224,6 +242,25 @@ Examples:
 			}
 		}
 
+		// If --project-number specified, add to the board and apply any board fields.
+		if createProjectNum > 0 && created.Number > 0 {
+			bf := boardFields{
+				Status:    createStatus,
+				Priority:  createPriority,
+				Points:    createPoints,
+				Iteration: createIteration,
+				Fields:    itemsFields,
+				Values:    itemsValues,
+			}
+			if err := addToBoardAndSet(c, createProjectNum, created.Number, bf); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: issue created (#%d) but board update failed: %s\n", created.Number, err)
+			} else if !quietFlag {
+				fmt.Fprintf(os.Stderr, "added #%d to project %d\n", created.Number, createProjectNum)
+			}
+		}
+
+		warnDroppedAssignees(data, issueAssignees)
+
 		if !quietFlag && created.Number > 0 {
 			fmt.Fprintf(os.Stderr, "created: #%d (%s)\n", created.Number, created.HTMLURL)
 		}
@@ -277,6 +314,9 @@ Examples:
 				return fmt.Errorf("--state must be 'open' or 'closed', got %q", issueEditState)
 			}
 			fields["state"] = issueEditState
+			if issueEditState == "open" {
+				fields["state_reason"] = "reopened"
+			}
 		}
 		if issueRemoveMilestone {
 			fields["milestone"] = nil
@@ -310,19 +350,60 @@ Examples:
 				return fmt.Errorf("remove assignees: %w", err)
 			}
 		}
-		// Labels: add and remove
+		// Labels: add and remove (surface errors — don't claim success on a failed call).
 		for _, l := range issueAddLabel {
-			c.Post(context.Background(), fmt.Sprintf("issues/%d/labels", num), map[string]any{"labels": []string{l}})
+			if _, err := c.Post(context.Background(), fmt.Sprintf("issues/%d/labels", num), map[string]any{"labels": []string{l}}); err != nil {
+				return fmt.Errorf("add label %q: %w", l, err)
+			}
 		}
 		for _, l := range issueRemLabel {
-			c.Delete(context.Background(), fmt.Sprintf("issues/%d/labels/%s", num, url.PathEscape(l)))
+			if err := c.Delete(context.Background(), fmt.Sprintf("issues/%d/labels/%s", num, url.PathEscape(l))); err != nil {
+				return fmt.Errorf("remove label %q: %w", l, err)
+			}
 		}
 
+		// Re-fetch so we can echo the updated issue and verify assignees landed.
+		data, err := c.Get(context.Background(), "issues/"+args[0], nil)
+		if err != nil {
+			if !quietFlag {
+				fmt.Fprintf(os.Stderr, "updated: #%s\n", args[0])
+			}
+			return nil
+		}
+		warnDroppedAssignees(data, append(append([]string{}, issueAssignees...), issueAddAssignee...))
 		if !quietFlag {
 			fmt.Fprintf(os.Stderr, "updated: #%s\n", args[0])
 		}
-		return nil
+		if flat := flattenIssue(data); flat != nil {
+			out, _ := json.Marshal(flat)
+			return printData("", out)
+		}
+		return printData("", data)
 	},
+}
+
+// warnDroppedAssignees warns to stderr for any requested assignee login that is
+// absent from the issue's final assignee set — GitHub silently ignores logins
+// that aren't valid assignees for the repo (no error), so this surfaces the loss.
+func warnDroppedAssignees(data json.RawMessage, requested []string) {
+	if len(requested) == 0 {
+		return
+	}
+	var issue struct {
+		Assignees []struct{ Login string } `json:"assignees"`
+	}
+	if json.Unmarshal(data, &issue) != nil {
+		return
+	}
+	have := make(map[string]bool, len(issue.Assignees))
+	for _, a := range issue.Assignees {
+		have[strings.ToLower(a.Login)] = true
+	}
+	for _, r := range requested {
+		if !have[strings.ToLower(r)] {
+			fmt.Fprintf(os.Stderr, "warning: assignee %q was not applied (not a valid assignee for this repo?)\n", r)
+		}
+	}
 }
 
 var issuesCloseCmd = &cobra.Command{
@@ -359,7 +440,11 @@ var issuesReopenCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if _, err := c.Patch(context.Background(), "issues/"+args[0], map[string]any{"state": "open"}); err != nil {
+		body := map[string]any{"state": "open"}
+		if issueReopenReason != "" {
+			body["state_reason"] = issueReopenReason
+		}
+		if _, err := c.Patch(context.Background(), "issues/"+args[0], body); err != nil {
 			return err
 		}
 		if !quietFlag {
@@ -370,9 +455,10 @@ var issuesReopenCmd = &cobra.Command{
 }
 
 var issuesAssignCmd = &cobra.Command{
-	Use:   "assign <number>",
-	Short: "Assign an issue",
-	Args:  cobra.ExactArgs(1),
+	Use:        "assign <number>",
+	Short:      "Assign an issue",
+	Deprecated: "use `gx issues edit <n> --add-assignee <login>` (repeatable) instead.",
+	Args:       cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := getClient(cmd)
 		if err != nil {
@@ -389,26 +475,60 @@ var issuesAssignCmd = &cobra.Command{
 	},
 }
 
-// resolveMilestoneNumber finds a milestone number by title.
+// resolveMilestoneNumber finds a milestone number by title across all states,
+// paginating beyond the 100/page cap (so closed and 101st+ milestones resolve).
 func resolveMilestoneNumber(c *client.Client, title string) (int, error) {
-	params := url.Values{"state": {"open"}, "per_page": {"100"}}
-	data, err := c.Get(context.Background(), "milestones", params)
-	if err != nil {
-		return 0, err
-	}
-	var milestones []struct {
-		Number int    `json:"number"`
-		Title  string `json:"title"`
-	}
-	if json.Unmarshal(data, &milestones) != nil {
-		return 0, fmt.Errorf("milestone %q not found", title)
-	}
-	for _, m := range milestones {
-		if strings.EqualFold(m.Title, title) {
-			return m.Number, nil
+	for page := 1; ; page++ {
+		params := url.Values{"state": {"all"}, "per_page": {"100"}, "page": {strconv.Itoa(page)}}
+		data, err := c.Get(context.Background(), "milestones", params)
+		if err != nil {
+			return 0, err
+		}
+		var milestones []struct {
+			Number int    `json:"number"`
+			Title  string `json:"title"`
+		}
+		if json.Unmarshal(data, &milestones) != nil || len(milestones) == 0 {
+			break
+		}
+		for _, m := range milestones {
+			if strings.EqualFold(m.Title, title) {
+				return m.Number, nil
+			}
+		}
+		if len(milestones) < 100 {
+			break
 		}
 	}
 	return 0, fmt.Errorf("milestone %q not found", title)
+}
+
+var issuesTypesCmd = &cobra.Command{
+	Use:   "types",
+	Short: "List the org's custom issue types (valid --type values)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := getClient(cmd)
+		if err != nil {
+			return err
+		}
+		data, err := c.GetAbsolute(context.Background(), fmt.Sprintf("https://api.github.com/orgs/%s/issue-types", c.Owner()))
+		if err != nil {
+			return err
+		}
+		var types []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if json.Unmarshal(data, &types) == nil && len(types) > 0 {
+			flat := make([]map[string]any, len(types))
+			for i, t := range types {
+				flat[i] = map[string]any{"name": t.Name, "description": t.Description}
+			}
+			out, _ := json.Marshal(flat)
+			return printData("issues.types", out)
+		}
+		return printData("", data)
+	},
 }
 
 var issuesTimelineCmd = &cobra.Command{

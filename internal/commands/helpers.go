@@ -10,22 +10,25 @@ import (
 // flattenIssue converts a GitHub REST API issue into a flat map.
 func flattenIssue(raw json.RawMessage) map[string]any {
 	var issue struct {
-		Number    int    `json:"number"`
-		Title     string `json:"title"`
-		State     string `json:"state"`
-		Body      string `json:"body"`
-		HTMLURL   string `json:"html_url"`
-		CreatedAt string `json:"created_at"`
-		UpdatedAt string `json:"updated_at"`
-		ClosedAt  string `json:"closed_at"`
-		User      *struct{ Login string } `json:"user"`
-		Assignee  *struct{ Login string } `json:"assignee"`
+		Number    int                      `json:"number"`
+		Title     string                   `json:"title"`
+		State     string                   `json:"state"`
+		Body      string                   `json:"body"`
+		HTMLURL   string                   `json:"html_url"`
+		CreatedAt string                   `json:"created_at"`
+		UpdatedAt string                   `json:"updated_at"`
+		ClosedAt  string                   `json:"closed_at"`
+		User      *struct{ Login string }  `json:"user"`
+		Assignee  *struct{ Login string }  `json:"assignee"`
 		Assignees []struct{ Login string } `json:"assignees"`
-		Labels    []struct{ Name string } `json:"labels"`
+		Labels    []struct{ Name string }  `json:"labels"`
 		Milestone *struct {
 			Number int    `json:"number"`
 			Title  string `json:"title"`
 		} `json:"milestone"`
+		Type *struct {
+			Name string `json:"name"`
+		} `json:"type"`
 	}
 	if json.Unmarshal(raw, &issue) != nil {
 		return nil
@@ -68,6 +71,9 @@ func flattenIssue(raw json.RawMessage) map[string]any {
 	if issue.Milestone != nil {
 		flat["milestone"] = issue.Milestone.Title
 		flat["milestone_number"] = issue.Milestone.Number
+	}
+	if issue.Type != nil {
+		flat["type"] = issue.Type.Name
 	}
 	return flat
 }

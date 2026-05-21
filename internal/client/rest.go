@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,6 +18,7 @@ const (
 	baseURL    = "https://api.github.com"
 	timeout    = 30 * time.Second
 	maxRetries = 3
+	maxBackoff = 60 * time.Second
 )
 
 // Client talks to both GitHub REST and GraphQL APIs.
@@ -59,59 +61,133 @@ func (c *Client) repoPath(path string) string {
 }
 
 func (c *Client) doRequest(ctx context.Context, method, rawURL string, body any) (json.RawMessage, error) {
-	var bodyReader io.Reader
+	// Marshal the body once so it can be re-buffered on each retry attempt
+	// (an io.Reader is consumed by the first send).
+	var bodyBytes []byte
 	if body != nil {
-		// If body is already json.RawMessage, use directly
 		if raw, ok := body.(json.RawMessage); ok {
-			bodyReader = bytes.NewReader(raw)
+			bodyBytes = raw
 		} else {
 			b, err := json.Marshal(body)
 			if err != nil {
 				return nil, fmt.Errorf("marshal body: %w", err)
 			}
-			bodyReader = bytes.NewReader(b)
+			bodyBytes = b
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
-	if err != nil {
-		return nil, err
-	}
-	c.setHeaders(req)
-
-	if c.verbose {
-		fmt.Fprintf(os.Stderr, "→ %s %s\n", method, rawURL)
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if c.verbose {
-		fmt.Fprintf(os.Stderr, "← %d (%d bytes)\n", resp.StatusCode, len(respBody))
-	}
-
-	if resp.StatusCode >= 400 {
-		apiErr := &APIError{StatusCode: resp.StatusCode}
-		json.Unmarshal(respBody, apiErr)
-		if apiErr.Message == "" {
-			apiErr.Message = string(respBody)
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		var bodyReader io.Reader
+		if bodyBytes != nil {
+			bodyReader = bytes.NewReader(bodyBytes)
 		}
-		return nil, apiErr
-	}
 
-	if resp.StatusCode == 204 || len(respBody) == 0 {
-		return json.RawMessage("null"), nil
-	}
+		req, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
+		if err != nil {
+			return nil, err
+		}
+		c.setHeaders(req)
 
-	return json.RawMessage(respBody), nil
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "→ %s %s\n", method, rawURL)
+		}
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read response: %w", readErr)
+		}
+
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "← %d (%d bytes)\n", resp.StatusCode, len(respBody))
+		}
+
+		if resp.StatusCode >= 400 {
+			apiErr := &APIError{StatusCode: resp.StatusCode}
+			json.Unmarshal(respBody, apiErr)
+			if apiErr.Message == "" {
+				apiErr.Message = string(respBody)
+			}
+			// Retry rate limits (any method, the request was rejected not processed)
+			// and transient 5xx (skip POST to avoid duplicate creates).
+			if attempt < maxRetries && isRetryable(resp, method) {
+				delay := retryDelay(resp, attempt)
+				if c.verbose {
+					fmt.Fprintf(os.Stderr, "  ↻ retrying after %s (status %d, attempt %d/%d)\n", delay, resp.StatusCode, attempt+1, maxRetries)
+				}
+				lastErr = apiErr
+				select {
+				case <-time.After(delay):
+					continue
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			return nil, apiErr
+		}
+
+		if resp.StatusCode == 204 || len(respBody) == 0 {
+			return json.RawMessage("null"), nil
+		}
+		return json.RawMessage(respBody), nil
+	}
+	return nil, lastErr
+}
+
+// isRetryable reports whether a failed response should be retried. Rate limits
+// (429, or 403 carrying a Retry-After) are always safe to retry because the
+// request was rejected before processing. Transient 5xx are retried only for
+// non-POST methods, since a POST may have partially succeeded (duplicate creates).
+// A bare 403 without Retry-After (auth failure or a secondary limit that has no
+// hint) is NOT retried — hammering a secondary limit only extends the block.
+func isRetryable(resp *http.Response, method string) bool {
+	switch {
+	case resp.StatusCode == 429:
+		return true
+	case resp.StatusCode == 403:
+		return resp.Header.Get("Retry-After") != ""
+	case resp.StatusCode >= 500:
+		return method != http.MethodPost
+	default:
+		return false
+	}
+}
+
+// retryDelay computes how long to wait before the next attempt, honoring
+// Retry-After (seconds) then X-RateLimit-Reset (epoch), falling back to
+// exponential backoff (1s, 2s, 4s …). Always clamped to [1s, maxBackoff].
+func retryDelay(resp *http.Response, attempt int) time.Duration {
+	if ra := strings.TrimSpace(resp.Header.Get("Retry-After")); ra != "" {
+		if secs, err := strconv.Atoi(ra); err == nil && secs >= 0 {
+			return capDelay(time.Duration(secs) * time.Second)
+		}
+	}
+	if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+		if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
+			if epoch, err := strconv.ParseInt(reset, 10, 64); err == nil {
+				if d := time.Until(time.Unix(epoch, 0)); d > 0 {
+					return capDelay(d)
+				}
+			}
+		}
+	}
+	return capDelay(time.Duration(1<<attempt) * time.Second)
+}
+
+func capDelay(d time.Duration) time.Duration {
+	switch {
+	case d > maxBackoff:
+		return maxBackoff
+	case d < time.Second:
+		return time.Second
+	default:
+		return d
+	}
 }
 
 // GetAbsolute performs a GET request on an absolute URL (not repo-scoped).

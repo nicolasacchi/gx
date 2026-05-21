@@ -13,11 +13,13 @@ import (
 )
 
 var (
-	bulkLabel     []string
-	bulkMilestone string
-	bulkState     string
-	bulkAddLabel  string
-	bulkReason    string
+	bulkLabel        []string
+	bulkMilestone    string
+	bulkState        string
+	bulkAddLabels    []string
+	bulkRemLabels    []string
+	bulkSetMilestone string
+	bulkReason       string
 )
 
 func init() {
@@ -27,7 +29,9 @@ func init() {
 
 	bulkEditCmd.Flags().StringSliceVar(&bulkLabel, "label", nil, "Filter by labels")
 	bulkEditCmd.Flags().StringVar(&bulkMilestone, "milestone", "", "Filter by milestone")
-	bulkEditCmd.Flags().StringVar(&bulkAddLabel, "add-label", "", "Label to add to all matching issues")
+	bulkEditCmd.Flags().StringSliceVar(&bulkAddLabels, "add-label", nil, "Label(s) to add to all matching issues")
+	bulkEditCmd.Flags().StringSliceVar(&bulkRemLabels, "remove-label", nil, "Label(s) to remove from all matching issues")
+	bulkEditCmd.Flags().StringVar(&bulkSetMilestone, "set-milestone", "", "Set milestone (by title) on all matching issues")
 
 	bulkCloseCmd.Flags().StringSliceVar(&bulkLabel, "label", nil, "Filter by labels")
 	bulkCloseCmd.Flags().StringVar(&bulkMilestone, "milestone", "", "Filter by milestone")
@@ -42,18 +46,27 @@ var bulkCmd = &cobra.Command{
 var bulkEditCmd = &cobra.Command{
 	Use:   "edit",
 	Short: "Bulk edit issues matching filters",
-	Long: `Add labels to all issues matching a filter.
+	Long: `Add/remove labels or set a milestone on all issues matching a filter.
 
 Examples:
   gx bulk edit --label "type:bug" --add-label "must-do"
-  gx bulk edit --milestone "v2.1" --add-label "ready"`,
+  gx bulk edit --milestone "v2.1" --add-label "ready" --remove-label "stale"
+  gx bulk edit --label "sdd:problem" --set-milestone "Triage"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := getClient(cmd)
 		if err != nil {
 			return err
 		}
-		if bulkAddLabel == "" {
-			return fmt.Errorf("specify --add-label")
+		if len(bulkAddLabels) == 0 && len(bulkRemLabels) == 0 && bulkSetMilestone == "" {
+			return fmt.Errorf("specify at least one of --add-label, --remove-label, --set-milestone")
+		}
+
+		var milestoneNum int
+		if bulkSetMilestone != "" {
+			milestoneNum, err = resolveMilestoneNumber(c, bulkSetMilestone)
+			if err != nil {
+				return err
+			}
 		}
 
 		issues, err := fetchFilteredIssues(c)
@@ -64,12 +77,29 @@ Examples:
 		fmt.Fprintf(os.Stderr, "bulk edit: %d issues\n", len(issues))
 		var success, fail int
 		for _, num := range issues {
-			_, err := c.Post(context.Background(), fmt.Sprintf("issues/%d/labels", num), map[string]any{"labels": []string{bulkAddLabel}})
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  failed: #%d — %s\n", num, err)
-				fail++
-			} else {
+			ok := true
+			for _, l := range bulkAddLabels {
+				if _, e := c.Post(context.Background(), fmt.Sprintf("issues/%d/labels", num), map[string]any{"labels": []string{l}}); e != nil {
+					fmt.Fprintf(os.Stderr, "  failed: #%d add %q — %s\n", num, l, e)
+					ok = false
+				}
+			}
+			for _, l := range bulkRemLabels {
+				if e := c.Delete(context.Background(), fmt.Sprintf("issues/%d/labels/%s", num, url.PathEscape(l))); e != nil {
+					fmt.Fprintf(os.Stderr, "  failed: #%d remove %q — %s\n", num, l, e)
+					ok = false
+				}
+			}
+			if bulkSetMilestone != "" {
+				if _, e := c.Patch(context.Background(), fmt.Sprintf("issues/%d", num), map[string]any{"milestone": milestoneNum}); e != nil {
+					fmt.Fprintf(os.Stderr, "  failed: #%d set-milestone — %s\n", num, e)
+					ok = false
+				}
+			}
+			if ok {
 				success++
+			} else {
+				fail++
 			}
 		}
 		fmt.Fprintf(os.Stderr, "done: %d updated, %d failed\n", success, fail)

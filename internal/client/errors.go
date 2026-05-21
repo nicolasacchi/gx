@@ -5,17 +5,20 @@ import (
 	"strings"
 )
 
+// ValidationError is a single element of GitHub's REST `errors` array.
+type ValidationError struct {
+	Message  string `json:"message"`
+	Type     string `json:"type"`
+	Field    string `json:"field"`
+	Resource string `json:"resource"`
+	Code     string `json:"code"`
+}
+
 // APIError represents an error from the GitHub API.
 type APIError struct {
 	StatusCode int
 	Message    string
-	Errors     []struct {
-		Message  string `json:"message"`
-		Type     string `json:"type"`
-		Field    string `json:"field"`
-		Resource string `json:"resource"`
-		Code     string `json:"code"`
-	}
+	Errors     []ValidationError
 }
 
 func (e *APIError) Error() string {
@@ -37,13 +40,7 @@ func (e *APIError) Error() string {
 }
 
 // validationDetail renders the actionable part of a GitHub REST validation error element.
-func validationDetail(v struct {
-	Message  string `json:"message"`
-	Type     string `json:"type"`
-	Field    string `json:"field"`
-	Resource string `json:"resource"`
-	Code     string `json:"code"`
-}) string {
+func validationDetail(v ValidationError) string {
 	if v.Message != "" {
 		return v.Message
 	}

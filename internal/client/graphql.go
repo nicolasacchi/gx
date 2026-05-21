@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 const graphqlURL = "https://api.github.com/graphql"
@@ -30,20 +31,34 @@ func (c *Client) GraphQL(ctx context.Context, query string, variables map[string
 	var result struct {
 		Data   json.RawMessage `json:"data"`
 		Errors []struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
+			Message string   `json:"message"`
+			Type    string   `json:"type"`
+			Path    []string `json:"path"`
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(resp, &result); err != nil {
-		return resp, nil
+		// A non-JSON 200 body (e.g. an HTML proxy/rate-limit page) is a failure,
+		// not data — surface it instead of handing raw bytes downstream.
+		return nil, fmt.Errorf("graphql: unexpected non-JSON response: %s", truncate(string(resp), 200))
 	}
 	if len(result.Errors) > 0 {
-		return nil, &APIError{
-			StatusCode: 200,
-			Message:    result.Errors[0].Message,
+		msg := result.Errors[0].Message
+		if p := result.Errors[0].Path; len(p) > 0 {
+			msg = fmt.Sprintf("%s (at %s)", msg, strings.Join(p, "."))
 		}
+		return nil, &APIError{StatusCode: 200, Message: msg}
+	}
+	if len(result.Data) == 0 || string(result.Data) == "null" {
+		return nil, fmt.Errorf("graphql: empty data with no errors (response: %s)", truncate(string(resp), 200))
 	}
 	return result.Data, nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // IssueNodeID resolves an issue number to its GraphQL node ID.

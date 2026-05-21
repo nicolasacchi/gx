@@ -20,9 +20,14 @@ func init() {
 	rootCmd.AddCommand(commentsCmd)
 	commentsCmd.AddCommand(commentsListCmd)
 	commentsCmd.AddCommand(commentsAddCmd)
+	commentsCmd.AddCommand(commentsEditCmd)
+	commentsCmd.AddCommand(commentsDeleteCmd)
 
 	commentsAddCmd.Flags().StringVar(&commentBody, "body", "", "Comment body")
 	commentsAddCmd.Flags().StringVar(&commentBodyFile, "file", "", "Read body from file")
+
+	commentsEditCmd.Flags().StringVar(&commentBody, "body", "", "New comment body")
+	commentsEditCmd.Flags().StringVar(&commentBodyFile, "file", "", "Read new body from file")
 }
 
 var commentsCmd = &cobra.Command{
@@ -52,10 +57,10 @@ var commentsListCmd = &cobra.Command{
 		var rows []map[string]any
 		for _, raw := range comments {
 			var cm struct {
-				ID        int    `json:"id"`
+				ID        int                    `json:"id"`
 				User      struct{ Login string } `json:"user"`
-				Body      string `json:"body"`
-				CreatedAt string `json:"created_at"`
+				Body      string                 `json:"body"`
+				CreatedAt string                 `json:"created_at"`
 			}
 			json.Unmarshal(raw, &cm)
 			body := cm.Body
@@ -107,5 +112,57 @@ var commentsAddCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "comment added on #%s\n", args[0])
 		}
 		return printData("", data)
+	},
+}
+
+var commentsEditCmd = &cobra.Command{
+	Use:   "edit <comment-id>",
+	Short: "Edit a comment by its comment ID",
+	Long: `Edit an issue comment. The <comment-id> is the numeric comment id
+(from 'gx comments list'), not the issue number.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := getClient(cmd)
+		if err != nil {
+			return err
+		}
+		body := commentBody
+		if commentBodyFile != "" {
+			content, err := os.ReadFile(commentBodyFile)
+			if err != nil {
+				return err
+			}
+			body = string(content)
+		}
+		if body == "" {
+			return fmt.Errorf("provide --body or --file")
+		}
+		data, err := c.Patch(context.Background(), "issues/comments/"+args[0], map[string]any{"body": body})
+		if err != nil {
+			return err
+		}
+		if !quietFlag {
+			fmt.Fprintf(os.Stderr, "comment %s edited\n", args[0])
+		}
+		return printData("", data)
+	},
+}
+
+var commentsDeleteCmd = &cobra.Command{
+	Use:   "delete <comment-id>",
+	Short: "Delete a comment by its comment ID",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := getClient(cmd)
+		if err != nil {
+			return err
+		}
+		if err := c.Delete(context.Background(), "issues/comments/"+args[0]); err != nil {
+			return err
+		}
+		if !quietFlag {
+			fmt.Fprintf(os.Stderr, "comment %s deleted\n", args[0])
+		}
+		return nil
 	},
 }

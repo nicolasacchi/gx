@@ -33,23 +33,28 @@ Resolution order (first non-empty wins):
 ```bash
 gx issues list --label "type:bug" --state open --milestone "v2.1"
 gx issues get 123
+gx issues types                                   # list valid org issue types for --type
 gx issues create --title "Fix" --type "Bug" --label "type:bug" --milestone "v2.1"
 gx issues create --title "Multi" --assignee alice --assignee bob   # multiple assignees
+gx issues create --title "Full" --type "Task" --project-number 3 --status "Backlog" \
+  --priority "High" --field "Component" --value "TECH"   # create + add to board + set fields in one call
 gx issues create --title "Sub-task" --type "Task" --parent 456    # create + link as sub-issue
 gx issues edit 123 --title "Updated" --body-file notes.md --type "Bug" --milestone "v2.1"
 gx issues edit 123 --assignee alice --assignee bob   # replace assignee set
 gx issues edit 123 --add-assignee carol --remove-assignee bob --add-label "must-do"
 gx issues edit 123 --state closed
 gx issues close 123 --reason "not planned"
-gx issues assign 123 --user nicolasacchi
 ```
 
 `create` and `edit` cover every issue-native field: `--title`, `--body`/`--body-file`,
-`--type` (org issue type), `--assignee` (repeatable; replaces the set), `--add-assignee`/
-`--remove-assignee`, `--milestone`/`--remove-milestone`, `--add-label`/`--remove-label`,
-and `--state open|closed`. Project-board fields (Status, Priority, Story Points, custom
-single-select/number/text, iteration) are set separately with `items set` — together they
-let you fill every writable field on a task from the CLI.
+`--type` (org issue type — `gx issues types` lists valid names), `--assignee` (repeatable;
+replaces the set), `--add-assignee`/`--remove-assignee`, `--milestone`/`--remove-milestone`,
+`--add-label`/`--remove-label`, and `--state open|closed`. `edit` echoes the updated issue as
+JSON (so `--jq` works) and warns when a requested assignee was silently dropped by GitHub.
+`create --project-number N` additionally adds the new issue to a board and applies
+`--status`/`--priority`/`--points`/`--iteration` + repeatable `--field`/`--value` in one call.
+Other board fields are set with `items set` — together they let you fill every writable field
+on a task from the CLI. (`gx issues assign` is **deprecated** → use `edit --add-assignee`.)
 
 ### sub-issues (GraphQL — the killer feature)
 ```bash
@@ -79,9 +84,13 @@ gx iterations current --project-number 1
 gx items set 123 --project-number 1 --status "In Progress"
 gx items set 123 --project-number 1 --priority "High" --points 5
 gx items set 123 --project-number 1 --iteration "Sprint 46"
-gx items set 123 --project-number 1 --field "Component" --value "TECH"
+gx items set 123 --project-number 1 --field "Component" --value "TECH" --field "Jira Key" --value "MLF-1"  # repeatable pairs
+gx items set 123 --project-number 1 --field "Target date" --value "2026-06-01"  # DATE fields supported
+gx items set 123 --project-number 1 --status "Ready" --add-if-missing            # add to board if not an item yet
 gx items clear 123 --project-number 1 --field "Story Points"
 ```
+
+`items set` dispatches `--field/--value` by the field's declared type (single-select / number / text / date / iteration), so a bad single-select option reports `option "X" not found` rather than an opaque GraphQL error. `--field`/`--value` are repeatable and must be given the same number of times.
 
 ### board (GraphQL)
 ```bash
@@ -109,14 +118,17 @@ gx issues unlock 123
 
 ### bulk (REST — batch operations)
 ```bash
-gx bulk edit --label "type:bug" --add-label "must-do"
+gx bulk edit --label "type:bug" --add-label "must-do" --remove-label "stale"
 gx bulk edit --milestone "v2.1" --add-label "ready"
+gx bulk edit --label "sdd:problem" --set-milestone "Triage"
 gx bulk close --label "sdd:problem" --reason "not_planned"
 ```
 
 ### comments, labels, search, overview, config, open (REST)
 ```bash
 gx comments add 123 --file context.md
+gx comments edit 456789 --body "updated"       # 456789 = comment id from `comments list`
+gx comments delete 456789
 gx labels list
 gx search "coupon discount" --label "type:bug"
 gx overview
@@ -145,11 +157,11 @@ gx open 123
 ```
 cmd/gx/main.go               Entry point
 internal/
-  client/rest.go              REST API: issues, milestones, labels, comments
+  client/rest.go              REST API + retry/backoff (rate limits, transient 5xx)
   client/graphql.go           GraphQL API: sub-issues, iterations, project fields
-  client/errors.go            APIError with ExitCode()
+  client/errors.go            APIError + ValidationError, ExitCode()
   commands/root.go            Root command, global flags, auth
-  commands/*.go               One file per command group (15 groups)
+  commands/*.go               One file per command group (13 groups)
   config/config.go            TOML config, multi-project, gh auth token reuse
   output/output.go            JSON/table dispatcher, TTY detection
   output/table.go             go-pretty tables, column definitions
@@ -166,6 +178,11 @@ GraphQL helpers for node ID resolution:
 - `ProjectNodeID(projectNumber)` → GraphQL node ID
 - `getProjectFields()` → all fields with IDs and options
 - `resolveOptionID(fieldName, optionName)` → auto-resolve both IDs
+
+**Retries:** `doRequest` retries rate limits (429, or 403 with `Retry-After`) for any method
+and transient 5xx for non-POST methods, honoring `Retry-After`/`X-RateLimit-Reset` then
+exponential backoff, capped at `maxRetries`/`maxBackoff`. A bare 403 (auth / hint-less
+secondary limit) is **not** retried — hammering a secondary limit only extends the block.
 
 ## Building
 

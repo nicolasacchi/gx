@@ -6,20 +6,23 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/nicolasacchi/gx/internal/client"
 	"github.com/spf13/cobra"
 )
 
 var (
-	itemsProjectNum int
-	itemsStatus     string
-	itemsPriority   string
-	itemsPoints     float64
-	itemsIteration  string
-	itemsField      string
-	itemsValue      string
-	itemsClear      bool
+	itemsProjectNum   int
+	itemsStatus       string
+	itemsPriority     string
+	itemsPoints       float64
+	itemsIteration    string
+	itemsFields       []string
+	itemsValues       []string
+	itemsClearField   string
+	itemsAddIfMissing bool
 )
 
 var itemsAddProjectNum int
@@ -39,12 +42,13 @@ func init() {
 	itemsSetCmd.Flags().StringVar(&itemsPriority, "priority", "", "Set priority (e.g., 'High')")
 	itemsSetCmd.Flags().Float64Var(&itemsPoints, "points", 0, "Set story points")
 	itemsSetCmd.Flags().StringVar(&itemsIteration, "iteration", "", "Set iteration by title")
-	itemsSetCmd.Flags().StringVar(&itemsField, "field", "", "Set custom field by name")
-	itemsSetCmd.Flags().StringVar(&itemsValue, "value", "", "Value for --field")
+	itemsSetCmd.Flags().StringArrayVar(&itemsFields, "field", nil, "Set custom field by name (repeatable; pair with --value)")
+	itemsSetCmd.Flags().StringArrayVar(&itemsValues, "value", nil, "Value for the matching --field (repeatable)")
+	itemsSetCmd.Flags().BoolVar(&itemsAddIfMissing, "add-if-missing", false, "Add the issue to the project board if it isn't already an item")
 	itemsSetCmd.MarkFlagRequired("project-number")
 
 	itemsClearCmd.Flags().IntVar(&itemsProjectNum, "project-number", 0, "Project number (required)")
-	itemsClearCmd.Flags().StringVar(&itemsField, "field", "", "Field name to clear (required)")
+	itemsClearCmd.Flags().StringVar(&itemsClearField, "field", "", "Field name to clear (required)")
 	itemsClearCmd.MarkFlagRequired("project-number")
 	itemsClearCmd.MarkFlagRequired("field")
 }
@@ -135,7 +139,17 @@ Examples:
 
 		itemID, err := findProjectItemID(c, projectID, issueNum)
 		if err != nil {
-			return fmt.Errorf("issue #%d not found in project %d: %w", issueNum, itemsProjectNum, err)
+			if !itemsAddIfMissing {
+				return fmt.Errorf("issue #%d not found in project %d (use --add-if-missing to add it): %w", issueNum, itemsProjectNum, err)
+			}
+			issueID, idErr := c.IssueNodeID(context.Background(), issueNum)
+			if idErr != nil {
+				return idErr
+			}
+			itemID, err = addProjectItem(c, projectID, issueID)
+			if err != nil {
+				return fmt.Errorf("add issue #%d to project %d: %w", issueNum, itemsProjectNum, err)
+			}
 		}
 
 		// Get all fields for auto-resolution
@@ -170,23 +184,11 @@ Examples:
 			}
 			updated++
 		}
-		if itemsField != "" && itemsValue != "" {
-			// Try as single-select first, then text, then number
-			if err := setFieldValue(c, projectID, itemID, fields, itemsField, itemsValue); err != nil {
-				// Try as number
-				if num, parseErr := strconv.ParseFloat(itemsValue, 64); parseErr == nil {
-					if err := setNumberField(c, projectID, itemID, fields, itemsField, num); err != nil {
-						return fmt.Errorf("set %s: %w", itemsField, err)
-					}
-				} else {
-					// Try as text
-					if err := setTextField(c, projectID, itemID, fields, itemsField, itemsValue); err != nil {
-						return fmt.Errorf("set %s: %w", itemsField, err)
-					}
-				}
-			}
-			updated++
+		n, err := setCustomFields(c, projectID, itemID, fields, itemsFields, itemsValues)
+		if err != nil {
+			return err
 		}
+		updated += n
 
 		if updated == 0 {
 			return fmt.Errorf("no fields to update; use --status, --priority, --points, --iteration, or --field/--value")
@@ -221,9 +223,9 @@ var itemsClearCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fieldID := resolveFieldID(fields, itemsField)
+		fieldID := resolveFieldID(fields, itemsClearField)
 		if fieldID == "" {
-			return fmt.Errorf("field %q not found", itemsField)
+			return fmt.Errorf("field %q not found", itemsClearField)
 		}
 
 		query := fmt.Sprintf(`mutation {
@@ -235,7 +237,7 @@ var itemsClearCmd = &cobra.Command{
 			return err
 		}
 		if !quietFlag {
-			fmt.Fprintf(os.Stderr, "cleared %s on #%d\n", itemsField, issueNum)
+			fmt.Fprintf(os.Stderr, "cleared %s on #%d\n", itemsClearField, issueNum)
 		}
 		return nil
 	},
@@ -328,10 +330,10 @@ func getProjectFields(c *client.Client, projectNum int) ([]projectField, error) 
 	var fields []projectField
 	for _, raw := range resp.Organization.ProjectV2.Fields.Nodes {
 		var f struct {
-			ID            string           `json:"id"`
-			Name          string           `json:"name"`
-			DataType      string           `json:"dataType"`
-			Options       []fieldOption    `json:"options"`
+			ID            string        `json:"id"`
+			Name          string        `json:"name"`
+			DataType      string        `json:"dataType"`
+			Options       []fieldOption `json:"options"`
 			Configuration *struct {
 				Iterations []fieldIteration `json:"iterations"`
 			} `json:"configuration"`
@@ -387,17 +389,151 @@ func resolveIterationID(fields []projectField, iterTitle string) (string, string
 }
 
 func equalsIgnoreCase(a, b string) bool {
-	return len(a) == len(b) && (a == b || lower(a) == lower(b))
+	return strings.EqualFold(a, b)
 }
 
-func lower(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			b[i] = c + 32
+// setCustomField sets one project field by name, dispatching on the field's
+// declared DataType so errors are precise (e.g. a bad single-select option
+// reports "option not found" instead of an opaque type error from a fallback).
+func setCustomField(c *client.Client, projectID, itemID string, fields []projectField, name, value string) error {
+	var f *projectField
+	for i := range fields {
+		if strings.EqualFold(fields[i].Name, name) {
+			f = &fields[i]
+			break
 		}
 	}
-	return string(b)
+	if f == nil {
+		return fmt.Errorf("field %q not found", name)
+	}
+	switch f.DataType {
+	case "SINGLE_SELECT":
+		return setFieldValue(c, projectID, itemID, fields, name, value)
+	case "NUMBER":
+		num, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return fmt.Errorf("field %q expects a number, got %q", name, value)
+		}
+		return setNumberField(c, projectID, itemID, fields, name, num)
+	case "TEXT":
+		return setTextField(c, projectID, itemID, fields, name, value)
+	case "DATE":
+		if !validDate(value) {
+			return fmt.Errorf("field %q expects a date as YYYY-MM-DD, got %q", name, value)
+		}
+		return setDateField(c, projectID, itemID, fields, name, value)
+	case "ITERATION":
+		return setIterationField(c, projectID, itemID, fields, value)
+	default:
+		return fmt.Errorf("field %q has unsupported type %q", name, f.DataType)
+	}
+}
+
+// setCustomFields applies a parallel list of --field/--value pairs and returns
+// how many were set.
+func setCustomFields(c *client.Client, projectID, itemID string, fields []projectField, names, values []string) (int, error) {
+	if len(names) != len(values) {
+		return 0, fmt.Errorf("--field and --value must be repeated the same number of times (%d field(s), %d value(s))", len(names), len(values))
+	}
+	for i := range names {
+		if err := setCustomField(c, projectID, itemID, fields, names[i], values[i]); err != nil {
+			return i, fmt.Errorf("set %q: %w", names[i], err)
+		}
+	}
+	return len(names), nil
+}
+
+func validDate(s string) bool {
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil
+}
+
+// addProjectItem adds an issue (by node ID) to a project and returns the new item ID.
+func addProjectItem(c *client.Client, projectID, issueID string) (string, error) {
+	query := fmt.Sprintf(`mutation {
+		addProjectV2ItemById(input: {projectId: %q, contentId: %q}) {
+			item { id }
+		}
+	}`, projectID, issueID)
+	data, err := c.GraphQL(context.Background(), query, nil)
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		AddProjectV2ItemById struct {
+			Item struct {
+				ID string `json:"id"`
+			} `json:"item"`
+		} `json:"addProjectV2ItemById"`
+	}
+	json.Unmarshal(data, &resp)
+	return resp.AddProjectV2ItemById.Item.ID, nil
+}
+
+// boardFields is the set of project-board values that can be applied at issue
+// creation time via `issues create --project-number ...`.
+type boardFields struct {
+	Status    string
+	Priority  string
+	Points    float64
+	Iteration string
+	Fields    []string
+	Values    []string
+}
+
+func (b boardFields) any() bool {
+	return b.Status != "" || b.Priority != "" || b.Points > 0 || b.Iteration != "" || len(b.Fields) > 0
+}
+
+// addToBoardAndSet adds a freshly-created issue to a project board and applies
+// the requested field values in one shot. Used by `issues create`.
+func addToBoardAndSet(c *client.Client, projectNum, issueNum int, bf boardFields) error {
+	projectID, err := c.ProjectNodeID(context.Background(), projectNum)
+	if err != nil {
+		return err
+	}
+	issueID, err := c.IssueNodeID(context.Background(), issueNum)
+	if err != nil {
+		return err
+	}
+	itemID, err := addProjectItem(c, projectID, issueID)
+	if err != nil {
+		return err
+	}
+	if itemID == "" {
+		return fmt.Errorf("added to project but no item id returned")
+	}
+	if !bf.any() {
+		return nil
+	}
+	fields, err := getProjectFields(c, projectNum)
+	if err != nil {
+		return err
+	}
+	if bf.Status != "" {
+		if err := setFieldValue(c, projectID, itemID, fields, "Status", bf.Status); err != nil {
+			return fmt.Errorf("set status: %w", err)
+		}
+	}
+	if bf.Priority != "" {
+		if err := setFieldValue(c, projectID, itemID, fields, "Priority", bf.Priority); err != nil {
+			return fmt.Errorf("set priority: %w", err)
+		}
+	}
+	if bf.Points > 0 {
+		if err := setNumberField(c, projectID, itemID, fields, "Story Points", bf.Points); err != nil {
+			return fmt.Errorf("set points: %w", err)
+		}
+	}
+	if bf.Iteration != "" {
+		if err := setIterationField(c, projectID, itemID, fields, bf.Iteration); err != nil {
+			return fmt.Errorf("set iteration: %w", err)
+		}
+	}
+	if _, err := setCustomFields(c, projectID, itemID, fields, bf.Fields, bf.Values); err != nil {
+		return err
+	}
+	return nil
 }
 
 func findProjectItemID(c *client.Client, projectID string, issueNum int) (string, error) {
@@ -489,6 +625,21 @@ func setTextField(c *client.Client, projectID, itemID string, fields []projectFi
 		updateProjectV2ItemFieldValue(input: {
 			projectId: %q, itemId: %q, fieldId: %q,
 			value: {text: %q}
+		}) { projectV2Item { id } }
+	}`, projectID, itemID, fieldID, value)
+	_, err := c.GraphQL(context.Background(), query, nil)
+	return err
+}
+
+func setDateField(c *client.Client, projectID, itemID string, fields []projectField, fieldName, value string) error {
+	fieldID := resolveFieldID(fields, fieldName)
+	if fieldID == "" {
+		return fmt.Errorf("field %q not found", fieldName)
+	}
+	query := fmt.Sprintf(`mutation {
+		updateProjectV2ItemFieldValue(input: {
+			projectId: %q, itemId: %q, fieldId: %q,
+			value: {date: %q}
 		}) { projectV2Item { id } }
 	}`, projectID, itemID, fieldID, value)
 	_, err := c.GraphQL(context.Background(), query, nil)
