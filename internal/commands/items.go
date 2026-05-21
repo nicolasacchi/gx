@@ -23,6 +23,8 @@ var (
 	itemsValues       []string
 	itemsClearField   string
 	itemsAddIfMissing bool
+	itemsDraftTitle   string
+	itemsDraftBody    string
 )
 
 var itemsAddProjectNum int
@@ -30,6 +32,8 @@ var itemsAddProjectNum int
 func init() {
 	rootCmd.AddCommand(itemsCmd)
 	itemsCmd.AddCommand(itemsAddCmd)
+	itemsCmd.AddCommand(itemsAddDraftCmd)
+	itemsCmd.AddCommand(itemsConvertDraftCmd)
 	itemsCmd.AddCommand(itemsGetCmd)
 	itemsCmd.AddCommand(itemsSetCmd)
 	itemsCmd.AddCommand(itemsClearCmd)
@@ -37,6 +41,15 @@ func init() {
 
 	itemsAddCmd.Flags().IntVar(&itemsAddProjectNum, "project-number", 0, "Project number (required)")
 	itemsAddCmd.MarkFlagRequired("project-number")
+
+	itemsAddDraftCmd.Flags().IntVar(&itemsProjectNum, "project-number", 0, "Project number (required)")
+	itemsAddDraftCmd.Flags().StringVar(&itemsDraftTitle, "title", "", "Draft title (required)")
+	itemsAddDraftCmd.Flags().StringVar(&itemsDraftBody, "body", "", "Draft body")
+	itemsAddDraftCmd.MarkFlagRequired("project-number")
+	itemsAddDraftCmd.MarkFlagRequired("title")
+
+	itemsConvertDraftCmd.Flags().IntVar(&itemsProjectNum, "project-number", 0, "Project number (required)")
+	itemsConvertDraftCmd.MarkFlagRequired("project-number")
 
 	itemsGetCmd.Flags().IntVar(&itemsProjectNum, "project-number", 0, "Project number (required)")
 	itemsGetCmd.MarkFlagRequired("project-number")
@@ -109,6 +122,104 @@ Examples:
 			return printData("", data)
 		}
 		return nil
+	},
+}
+
+var itemsAddDraftCmd = &cobra.Command{
+	Use:   "add-draft",
+	Short: "Add a draft issue (board-only item, no backing repo issue) to a project",
+	Long: `Create a draft issue directly on a project board. Drafts have a title/body
+but no repository issue behind them; convert one later with 'items convert-draft'.
+
+Example:
+  gx items add-draft --project-number 3 --title "Spike: evaluate X" --body "notes"`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := getClient(cmd)
+		if err != nil {
+			return err
+		}
+		projectID, err := c.ProjectNodeID(context.Background(), itemsProjectNum)
+		if err != nil {
+			return err
+		}
+		query := fmt.Sprintf(`mutation {
+			addProjectV2DraftIssue(input: {projectId: %q, title: %q, body: %q}) {
+				projectItem { id }
+			}
+		}`, projectID, itemsDraftTitle, itemsDraftBody)
+		data, err := c.GraphQL(context.Background(), query, nil)
+		if err != nil {
+			return err
+		}
+		var resp struct {
+			AddProjectV2DraftIssue struct {
+				ProjectItem struct {
+					ID string `json:"id"`
+				} `json:"projectItem"`
+			} `json:"addProjectV2DraftIssue"`
+		}
+		json.Unmarshal(data, &resp)
+		if !quietFlag {
+			fmt.Fprintf(os.Stderr, "added draft %q to project %d (item %s)\n", itemsDraftTitle, itemsProjectNum, resp.AddProjectV2DraftIssue.ProjectItem.ID)
+		}
+		out, _ := json.Marshal(map[string]any{"item_id": resp.AddProjectV2DraftIssue.ProjectItem.ID})
+		return printData("items.add-draft", out)
+	},
+}
+
+var itemsConvertDraftCmd = &cobra.Command{
+	Use:   "convert-draft <item-id>",
+	Short: "Convert a draft item into a real issue in the configured repo",
+	Long: `Convert a draft project item (its node id, from 'items add-draft' or the
+board) into a real repository issue in --owner/--repo.
+
+Example:
+  gx items convert-draft PVTI_xxx --project-number 3`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := getClient(cmd)
+		if err != nil {
+			return err
+		}
+		repoQuery := fmt.Sprintf(`{ repository(owner: %q, name: %q) { id } }`, c.Owner(), c.Repo())
+		repoData, err := c.GraphQL(context.Background(), repoQuery, nil)
+		if err != nil {
+			return err
+		}
+		var rr struct {
+			Repository struct {
+				ID string `json:"id"`
+			} `json:"repository"`
+		}
+		if json.Unmarshal(repoData, &rr) != nil || rr.Repository.ID == "" {
+			return fmt.Errorf("repository %s/%s not found", c.Owner(), c.Repo())
+		}
+		mutation := fmt.Sprintf(`mutation {
+			convertProjectV2DraftIssueItemToIssue(input: {itemId: %q, repositoryId: %q}) {
+				item { content { ... on Issue { number url } } }
+			}
+		}`, args[0], rr.Repository.ID)
+		data, err := c.GraphQL(context.Background(), mutation, nil)
+		if err != nil {
+			return err
+		}
+		var resp struct {
+			ConvertProjectV2DraftIssueItemToIssue struct {
+				Item struct {
+					Content struct {
+						Number int    `json:"number"`
+						URL    string `json:"url"`
+					} `json:"content"`
+				} `json:"item"`
+			} `json:"convertProjectV2DraftIssueItemToIssue"`
+		}
+		json.Unmarshal(data, &resp)
+		num := resp.ConvertProjectV2DraftIssueItemToIssue.Item.Content.Number
+		if !quietFlag {
+			fmt.Fprintf(os.Stderr, "converted draft → issue #%d in %s/%s\n", num, c.Owner(), c.Repo())
+		}
+		out, _ := json.Marshal(map[string]any{"number": num, "url": resp.ConvertProjectV2DraftIssueItemToIssue.Item.Content.URL})
+		return printData("items.convert-draft", out)
 	},
 }
 

@@ -33,6 +33,7 @@ var (
 	issueCloseReason     string
 	issueReopenReason    string
 	issueTransferTo      string
+	issueDevelopName     string
 	issueUser            string
 
 	// create --project-number board flags (custom fields reuse itemsFields/itemsValues)
@@ -50,6 +51,7 @@ func init() {
 	issuesCmd.AddCommand(issuesCreateCmd)
 	issuesCmd.AddCommand(issuesTypesCmd)
 	issuesCmd.AddCommand(issuesTransferCmd)
+	issuesCmd.AddCommand(issuesDevelopCmd)
 	issuesCmd.AddCommand(issuesEditCmd)
 	issuesCmd.AddCommand(issuesCloseCmd)
 	issuesCmd.AddCommand(issuesReopenCmd)
@@ -102,6 +104,8 @@ func init() {
 
 	issuesTransferCmd.Flags().StringVar(&issueTransferTo, "to-repo", "", "Target repository name, same owner (required)")
 	issuesTransferCmd.MarkFlagRequired("to-repo")
+
+	issuesDevelopCmd.Flags().StringVar(&issueDevelopName, "name", "", "Branch name (default: <number>-<slugified title>)")
 
 	issuesAssignCmd.Flags().StringVar(&issueUser, "user", "", "Assignee login (required)")
 	issuesAssignCmd.MarkFlagRequired("user")
@@ -558,6 +562,91 @@ var issuesTransferCmd = &cobra.Command{
 		}
 		return printData("", data)
 	},
+}
+
+var issuesDevelopCmd = &cobra.Command{
+	Use:   "develop <number>",
+	Short: "Create a branch linked to an issue (off the default branch)",
+	Long: `Create a Git branch linked to an issue (like 'gh issue develop'), branched
+from the repo's default branch tip. Defaults the branch name to
+<number>-<slugified title> unless --name is given.
+
+Example:
+  gx issues develop 123 --name 123-fix-login`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := getClient(cmd)
+		if err != nil {
+			return err
+		}
+		num, err := parseNumber(args[0])
+		if err != nil {
+			return err
+		}
+		infoQuery := fmt.Sprintf(`{
+			repository(owner: %q, name: %q) {
+				defaultBranchRef { target { oid } }
+				issue(number: %d) { id title }
+			}
+		}`, c.Owner(), c.Repo(), num)
+		infoData, err := c.GraphQL(context.Background(), infoQuery, nil)
+		if err != nil {
+			return err
+		}
+		var info struct {
+			Repository struct {
+				DefaultBranchRef struct {
+					Target struct {
+						Oid string `json:"oid"`
+					} `json:"target"`
+				} `json:"defaultBranchRef"`
+				Issue struct {
+					ID    string `json:"id"`
+					Title string `json:"title"`
+				} `json:"issue"`
+			} `json:"repository"`
+		}
+		if json.Unmarshal(infoData, &info) != nil || info.Repository.Issue.ID == "" || info.Repository.DefaultBranchRef.Target.Oid == "" {
+			return fmt.Errorf("could not resolve issue #%d or the default branch in %s/%s", num, c.Owner(), c.Repo())
+		}
+		name := issueDevelopName
+		if name == "" {
+			name = fmt.Sprintf("%d-%s", num, slugify(info.Repository.Issue.Title))
+		}
+		mutation := fmt.Sprintf(`mutation {
+			createLinkedBranch(input: {issueId: %q, oid: %q, name: %q}) {
+				linkedBranch { ref { name } }
+			}
+		}`, info.Repository.Issue.ID, info.Repository.DefaultBranchRef.Target.Oid, name)
+		data, err := c.GraphQL(context.Background(), mutation, nil)
+		if err != nil {
+			return err
+		}
+		if !quietFlag {
+			fmt.Fprintf(os.Stderr, "created branch %q linked to #%d\n", name, num)
+		}
+		return printData("", data)
+	},
+}
+
+// slugify turns an issue title into a branch-name-safe slug.
+func slugify(s string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 50 {
+		out = strings.Trim(out[:50], "-")
+	}
+	return out
 }
 
 var issuesTypesCmd = &cobra.Command{
