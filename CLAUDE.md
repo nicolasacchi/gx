@@ -44,6 +44,13 @@ gx issues close 123 --reason "not planned"
 gx issues assign 123 --user nicolasacchi
 ```
 
+`create` and `edit` cover every issue-native field: `--title`, `--body`/`--body-file`,
+`--type` (org issue type), `--assignee` (repeatable; replaces the set), `--add-assignee`/
+`--remove-assignee`, `--milestone`/`--remove-milestone`, `--add-label`/`--remove-label`,
+and `--state open|closed`. Project-board fields (Status, Priority, Story Points, custom
+single-select/number/text, iteration) are set separately with `items set` — together they
+let you fill every writable field on a task from the CLI.
+
 ### sub-issues (GraphQL — the killer feature)
 ```bash
 gx sub-issues list 123
