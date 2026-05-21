@@ -97,6 +97,21 @@ func (c *Client) doRequest(ctx context.Context, method, rawURL string, body any)
 
 		resp, err := c.http.Do(req)
 		if err != nil {
+			// Transient network error (conn reset/refused, EOF). Safe to retry for
+			// non-POST methods; a POST may have reached the server and created state.
+			if attempt < maxRetries && method != http.MethodPost {
+				lastErr = err
+				delay := capDelay(time.Duration(1<<attempt) * time.Second)
+				if c.verbose {
+					fmt.Fprintf(os.Stderr, "  ↻ retrying after %s (network error, attempt %d/%d): %s\n", delay, attempt+1, maxRetries, err)
+				}
+				select {
+				case <-time.After(delay):
+					continue
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
 			return nil, err
 		}
 		respBody, readErr := io.ReadAll(resp.Body)

@@ -148,6 +148,56 @@ func TestDoRequestPost5xxNoRetry(t *testing.T) {
 	}
 }
 
+func TestDoRequestRetriesNetworkErrorForGet(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&n, 1) == 1 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				return
+			}
+			conn, _, _ := hj.Hijack()
+			conn.Close() // abort without a response → client sees a network error
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	withBaseURL(t, srv.URL)
+
+	data, err := New("t", "o", "r", false).Get(context.Background(), "issues", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := atomic.LoadInt32(&n); got != 2 {
+		t.Errorf("attempts=%d want 2 (GET network error retried)", got)
+	}
+	if string(data) != `{"ok":true}` {
+		t.Errorf("body=%s", data)
+	}
+}
+
+func TestDoRequestPostNetworkErrorNoRetry(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&n, 1)
+		if hj, ok := w.(http.Hijacker); ok {
+			conn, _, _ := hj.Hijack()
+			conn.Close()
+		}
+	}))
+	defer srv.Close()
+	withBaseURL(t, srv.URL)
+
+	if _, err := New("t", "o", "r", false).Post(context.Background(), "issues", map[string]any{"x": 1}); err == nil {
+		t.Fatal("expected error")
+	}
+	if got := atomic.LoadInt32(&n); got != 1 {
+		t.Errorf("attempts=%d want 1 (POST network error not retried)", got)
+	}
+}
+
 func TestDoRequestBodyResentOnRetry(t *testing.T) {
 	var n int32
 	bodies := make([]string, 0, 2)

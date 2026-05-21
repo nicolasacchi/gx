@@ -30,12 +30,16 @@ var itemsAddProjectNum int
 func init() {
 	rootCmd.AddCommand(itemsCmd)
 	itemsCmd.AddCommand(itemsAddCmd)
+	itemsCmd.AddCommand(itemsGetCmd)
 	itemsCmd.AddCommand(itemsSetCmd)
 	itemsCmd.AddCommand(itemsClearCmd)
 	itemsCmd.AddCommand(itemsArchiveCmd)
 
 	itemsAddCmd.Flags().IntVar(&itemsAddProjectNum, "project-number", 0, "Project number (required)")
 	itemsAddCmd.MarkFlagRequired("project-number")
+
+	itemsGetCmd.Flags().IntVar(&itemsProjectNum, "project-number", 0, "Project number (required)")
+	itemsGetCmd.MarkFlagRequired("project-number")
 
 	itemsSetCmd.Flags().IntVar(&itemsProjectNum, "project-number", 0, "Project number (required)")
 	itemsSetCmd.Flags().StringVar(&itemsStatus, "status", "", "Set status (e.g., 'In Progress')")
@@ -105,6 +109,111 @@ Examples:
 			return printData("", data)
 		}
 		return nil
+	},
+}
+
+var itemsGetCmd = &cobra.Command{
+	Use:   "get <issue-number>",
+	Short: "Show an issue's current project field values",
+	Long: `Read the current board field values for an issue (the read half of a
+read-modify-write loop). Pairs with 'board fields' (which lists definitions).
+
+Example:
+  gx items get 123 --project-number 3`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := getClient(cmd)
+		if err != nil {
+			return err
+		}
+		issueNum, err := parseNumber(args[0])
+		if err != nil {
+			return err
+		}
+		issueID, err := c.IssueNodeID(context.Background(), issueNum)
+		if err != nil {
+			return err
+		}
+		query := fmt.Sprintf(`{
+			node(id: %q) {
+				... on Issue {
+					projectItems(first: 20) {
+						nodes {
+							project { number }
+							fieldValues(first: 50) {
+								nodes {
+									... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
+									... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
+									... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { name } } }
+									... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
+									... on ProjectV2ItemFieldIterationValue { title field { ... on ProjectV2FieldCommon { name } } }
+								}
+							}
+						}
+					}
+				}
+			}
+		}`, issueID)
+		data, err := c.GraphQL(context.Background(), query, nil)
+		if err != nil {
+			return err
+		}
+		var resp struct {
+			Node struct {
+				ProjectItems struct {
+					Nodes []struct {
+						Project struct {
+							Number int `json:"number"`
+						} `json:"project"`
+						FieldValues struct {
+							Nodes []struct {
+								Field struct {
+									Name string `json:"name"`
+								} `json:"field"`
+								Text   *string  `json:"text"`
+								Number *float64 `json:"number"`
+								Date   *string  `json:"date"`
+								Name   *string  `json:"name"`
+								Title  *string  `json:"title"`
+							} `json:"nodes"`
+						} `json:"fieldValues"`
+					} `json:"nodes"`
+				} `json:"projectItems"`
+			} `json:"node"`
+		}
+		if err := json.Unmarshal(data, &resp); err != nil {
+			return fmt.Errorf("parse field values: %w", err)
+		}
+		out := map[string]any{}
+		found := false
+		for _, item := range resp.Node.ProjectItems.Nodes {
+			if item.Project.Number != itemsProjectNum {
+				continue
+			}
+			found = true
+			for _, fv := range item.FieldValues.Nodes {
+				if fv.Field.Name == "" {
+					continue
+				}
+				switch {
+				case fv.Text != nil:
+					out[fv.Field.Name] = *fv.Text
+				case fv.Number != nil:
+					out[fv.Field.Name] = *fv.Number
+				case fv.Date != nil:
+					out[fv.Field.Name] = *fv.Date
+				case fv.Name != nil:
+					out[fv.Field.Name] = *fv.Name
+				case fv.Title != nil:
+					out[fv.Field.Name] = *fv.Title
+				}
+			}
+		}
+		if !found {
+			return fmt.Errorf("issue #%d is not an item in project %d", issueNum, itemsProjectNum)
+		}
+		b, _ := json.Marshal(out)
+		return printData("items.get", b)
 	},
 }
 

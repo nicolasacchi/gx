@@ -32,6 +32,7 @@ var (
 	issueRemLabel        []string
 	issueCloseReason     string
 	issueReopenReason    string
+	issueTransferTo      string
 	issueUser            string
 
 	// create --project-number board flags (custom fields reuse itemsFields/itemsValues)
@@ -48,6 +49,7 @@ func init() {
 	issuesCmd.AddCommand(issuesGetCmd)
 	issuesCmd.AddCommand(issuesCreateCmd)
 	issuesCmd.AddCommand(issuesTypesCmd)
+	issuesCmd.AddCommand(issuesTransferCmd)
 	issuesCmd.AddCommand(issuesEditCmd)
 	issuesCmd.AddCommand(issuesCloseCmd)
 	issuesCmd.AddCommand(issuesReopenCmd)
@@ -97,6 +99,9 @@ func init() {
 	issuesCloseCmd.Flags().StringVar(&issueCloseReason, "reason", "", "Close reason: completed, not_planned")
 
 	issuesReopenCmd.Flags().StringVar(&issueReopenReason, "reason", "reopened", "Reopen state_reason (default: reopened)")
+
+	issuesTransferCmd.Flags().StringVar(&issueTransferTo, "to-repo", "", "Target repository name, same owner (required)")
+	issuesTransferCmd.MarkFlagRequired("to-repo")
 
 	issuesAssignCmd.Flags().StringVar(&issueUser, "user", "", "Assignee login (required)")
 	issuesAssignCmd.MarkFlagRequired("user")
@@ -259,6 +264,7 @@ Examples:
 			}
 		}
 
+		warnAssigneeCap(issueAssignees)
 		warnDroppedAssignees(data, issueAssignees)
 
 		if !quietFlag && created.Number > 0 {
@@ -370,6 +376,7 @@ Examples:
 			}
 			return nil
 		}
+		warnAssigneeCap(issueAssignees)
 		warnDroppedAssignees(data, append(append([]string{}, issueAssignees...), issueAddAssignee...))
 		if !quietFlag {
 			fmt.Fprintf(os.Stderr, "updated: #%s\n", args[0])
@@ -380,6 +387,14 @@ Examples:
 		}
 		return printData("", data)
 	},
+}
+
+// warnAssigneeCap notes when more than GitHub's hard cap of 10 assignees is
+// requested, since the extras are silently dropped.
+func warnAssigneeCap(logins []string) {
+	if len(logins) > 10 {
+		fmt.Fprintf(os.Stderr, "warning: %d assignees requested but GitHub caps issues at 10 — extras will be dropped\n", len(logins))
+	}
 }
 
 // warnDroppedAssignees warns to stderr for any requested assignee login that is
@@ -501,6 +516,48 @@ func resolveMilestoneNumber(c *client.Client, title string) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("milestone %q not found", title)
+}
+
+var issuesTransferCmd = &cobra.Command{
+	Use:   "transfer <number>",
+	Short: "Transfer an issue to another repository (same owner)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := getClient(cmd)
+		if err != nil {
+			return err
+		}
+		num, err := parseNumber(args[0])
+		if err != nil {
+			return err
+		}
+		issueID, err := c.IssueNodeID(context.Background(), num)
+		if err != nil {
+			return err
+		}
+		repoQuery := fmt.Sprintf(`{ repository(owner: %q, name: %q) { id } }`, c.Owner(), issueTransferTo)
+		repoData, err := c.GraphQL(context.Background(), repoQuery, nil)
+		if err != nil {
+			return err
+		}
+		var rr struct {
+			Repository struct {
+				ID string `json:"id"`
+			} `json:"repository"`
+		}
+		if json.Unmarshal(repoData, &rr) != nil || rr.Repository.ID == "" {
+			return fmt.Errorf("target repository %q not found under %s", issueTransferTo, c.Owner())
+		}
+		mutation := fmt.Sprintf(`mutation { transferIssue(input: {issueId: %q, repositoryId: %q}) { issue { number url } } }`, issueID, rr.Repository.ID)
+		data, err := c.GraphQL(context.Background(), mutation, nil)
+		if err != nil {
+			return err
+		}
+		if !quietFlag {
+			fmt.Fprintf(os.Stderr, "transferred #%d → %s/%s\n", num, c.Owner(), issueTransferTo)
+		}
+		return printData("", data)
+	},
 }
 
 var issuesTypesCmd = &cobra.Command{

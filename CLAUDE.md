@@ -44,6 +44,7 @@ gx issues edit 123 --assignee alice --assignee bob   # replace assignee set
 gx issues edit 123 --add-assignee carol --remove-assignee bob --add-label "must-do"
 gx issues edit 123 --state closed
 gx issues close 123 --reason "not planned"
+gx issues transfer 123 --to-repo other-repo   # move to another repo (same owner)
 ```
 
 `create` and `edit` cover every issue-native field: `--title`, `--body`/`--body-file`,
@@ -81,6 +82,7 @@ gx iterations current --project-number 1
 
 ### items (GraphQL — auto-resolves field/option IDs)
 ```bash
+gx items get 123 --project-number 1                   # read current board field values (read-modify-write)
 gx items set 123 --project-number 1 --status "In Progress"
 gx items set 123 --project-number 1 --priority "High" --points 5
 gx items set 123 --project-number 1 --iteration "Sprint 46"
