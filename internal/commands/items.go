@@ -68,6 +68,9 @@ func init() {
 	itemsClearCmd.Flags().StringVar(&itemsClearField, "field", "", "Field name to clear (required)")
 	itemsClearCmd.MarkFlagRequired("project-number")
 	itemsClearCmd.MarkFlagRequired("field")
+
+	itemsArchiveCmd.Flags().IntVar(&itemsProjectNum, "project-number", 0, "Project number (required)")
+	itemsArchiveCmd.MarkFlagRequired("project-number")
 }
 
 var itemsCmd = &cobra.Command{

@@ -43,6 +43,18 @@ func TestAPIErrorError(t *testing.T) {
 	}
 }
 
+func TestOverrideEndpoints(t *testing.T) {
+	origRest, origGQL := baseURL, graphqlURL
+	restore := OverrideEndpoints("http://rest.test", "http://gql.test")
+	if baseURL != "http://rest.test" || graphqlURL != "http://gql.test" {
+		t.Fatalf("endpoints not overridden: %s / %s", baseURL, graphqlURL)
+	}
+	restore()
+	if baseURL != origRest || graphqlURL != origGQL {
+		t.Errorf("restore failed: %s / %s", baseURL, graphqlURL)
+	}
+}
+
 func TestExitCode(t *testing.T) {
 	for status, want := range map[int]int{401: 3, 403: 3, 404: 4, 422: 1, 500: 1, 200: 1} {
 		if got := (&APIError{StatusCode: status}).ExitCode(); got != want {
