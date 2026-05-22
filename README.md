@@ -28,6 +28,9 @@ The `gh` CLI handles basic issue CRUD but can't:
 | **Project field updates** | Requires manual ID lookups | `gx items set 123 --status "In Progress"` |
 | **Overview** | Impossible | `gx overview` (parallel health snapshot) |
 
+Use `gh` for code (PRs, CI, repos, releases, auth) and `gx` for tasks (issues + Projects v2).
+Full comparison and decision guide: [`docs/gx-vs-gh.md`](docs/gx-vs-gh.md).
+
 ## Quick Start
 
 ```bash
