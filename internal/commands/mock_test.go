@@ -170,6 +170,9 @@ func resetFlags() {
 	itemsAddIfMissing = false
 	tokenFlag, ownerFlag, repoFlag, projectFlag, jqFlag = "", "", "", "", ""
 	jsonFlag, verboseFlag, quietFlag = false, false, false
+	yesFlag, dryRunFlag = false, false
 	limitFlag = 50
 	commentBody, commentBodyFile = "", ""
+	bulkLabel, bulkAddLabels, bulkRemLabels = nil, nil, nil
+	bulkMilestone, bulkState, bulkSetMilestone, bulkReason = "", "", "", ""
 }

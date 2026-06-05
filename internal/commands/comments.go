@@ -157,6 +157,14 @@ var commentsDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		// Deleting a comment is irreversible — gate it behind --yes/--dry-run.
+		if dryRun() {
+			fmt.Fprintf(os.Stderr, "--dry-run: would delete comment %s, no changes made\n", args[0])
+			return nil
+		}
+		if err := requireConfirm(fmt.Sprintf("deleting comment %s", args[0])); err != nil {
+			return err
+		}
 		if err := c.Delete(context.Background(), "issues/comments/"+args[0]); err != nil {
 			return err
 		}

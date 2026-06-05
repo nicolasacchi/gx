@@ -26,6 +26,8 @@ Resolution order (first non-empty wins):
 | `--limit` | 50 | Max results |
 | `--verbose` | false | Print requests to stderr |
 | `--quiet` | false | Suppress non-error output |
+| `--yes` / `--confirm` | false | Confirm destructive operations (`bulk close/edit`, `comments delete`) |
+| `--dry-run` | false | Print the intended mutation and exit without sending |
 
 ## Commands
 
@@ -123,11 +125,21 @@ gx issues unlock 123
 
 ### bulk (REST — batch operations)
 ```bash
-gx bulk edit --label "type:bug" --add-label "must-do" --remove-label "stale"
-gx bulk edit --milestone "v2.1" --add-label "ready"
-gx bulk edit --label "sdd:problem" --set-milestone "Triage"
-gx bulk close --label "sdd:problem" --reason "not_planned"
+gx bulk edit --label "type:bug" --add-label "must-do" --remove-label "stale" --yes
+gx bulk edit --milestone "v2.1" --add-label "ready" --yes
+gx bulk edit --label "sdd:problem" --set-milestone "Triage" --yes
+gx bulk close --label "sdd:problem" --reason "not_planned" --yes
+gx bulk close --label "sdd:problem" --dry-run    # preview matches, send nothing
 ```
+
+**Write-safety gate.** `bulk close` and `bulk edit` mutate Project #3 (the sole
+source of truth for task state), so they are guarded twice: (1) they **require at
+least one selector** (`--label` or `--milestone`) — an empty filter can never
+resolve to "the first 100 open issues" and silently close live tickets; (2) they
+**refuse unless `--yes`/`--confirm`** is passed, exiting code `6` (`write_locked`)
+otherwise. `--dry-run` prints the match count and the intended change without
+sending. Automation must pass `--yes` explicitly so destructive intent is
+recorded on the command line. The same gate guards `comments delete`.
 
 ### comments, labels, search, overview, config, open (REST)
 ```bash
@@ -156,6 +168,7 @@ gx open 123
 | 1 | API/network error |
 | 3 | Auth error (401/403) |
 | 4 | Not found (404) |
+| 6 | Write refused — confirmation required (`write_locked`); re-run with `--yes` |
 
 ## Architecture
 
