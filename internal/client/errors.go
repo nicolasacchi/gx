@@ -15,13 +15,35 @@ type ValidationError struct {
 }
 
 // APIError represents an error from the GitHub API.
+//
+// It doubles as the transport-independent error type for client-side guards
+// (e.g. the write-safety confirm gate), which set Kind/Detail/Hint and leave
+// StatusCode zero. Kind lets callers and agents dispatch on the failure class
+// rather than parsing the message — "write_locked" means refused, not failed.
 type APIError struct {
 	StatusCode int
 	Message    string
 	Errors     []ValidationError
+
+	// Kind classifies non-transport errors raised before/around a request.
+	// Empty for ordinary GitHub API failures. Currently: "write_locked".
+	Kind   string
+	Detail string // human-readable reason (used when StatusCode == 0)
+	Hint   string // actionable next step, appended to Error()
 }
 
 func (e *APIError) Error() string {
+	// Client-side guard errors (no HTTP status) render from Detail/Hint.
+	if e.Kind != "" && e.StatusCode == 0 {
+		msg := e.Detail
+		if msg == "" {
+			msg = e.Kind
+		}
+		if e.Hint != "" {
+			return fmt.Sprintf("%s — %s", msg, e.Hint)
+		}
+		return msg
+	}
 	if e.Message != "" {
 		// 422 validation failures carry the actionable detail in Errors[], not Message
 		// (which is just "Validation Failed"). Surface the first field-level reason so the
@@ -57,6 +79,8 @@ func validationDetail(v ValidationError) string {
 // ExitCode returns the process exit code.
 func (e *APIError) ExitCode() int {
 	switch {
+	case e.Kind == "write_locked":
+		return 6 // refused for safety, not failed — matches the otx/stx write-gate contract
 	case e.StatusCode == 401 || e.StatusCode == 403:
 		return 3
 	case e.StatusCode == 404:

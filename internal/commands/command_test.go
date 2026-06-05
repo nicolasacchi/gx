@@ -97,7 +97,7 @@ func TestCmdIssuesDevelop(t *testing.T) {
 
 func TestCmdBulkClose(t *testing.T) {
 	newMock(t)
-	if _, err := runGx(t, baseArgs("bulk", "close", "--label", "type:bug")...); err != nil {
+	if _, err := runGx(t, baseArgs("bulk", "close", "--label", "type:bug", "--yes")...); err != nil {
 		t.Fatalf("bulk close: %v", err)
 	}
 }
@@ -120,7 +120,7 @@ func TestCmdReadAndSimple(t *testing.T) {
 		{"milestones", "list"},
 		{"comments", "list", "123"},
 		{"comments", "edit", "555", "--body", "edited"},
-		{"comments", "delete", "555"},
+		{"comments", "delete", "555", "--yes"},
 		{"board", "fields", "--project-number", "3"},
 		{"sub-issues", "add", "123", "456"},
 		{"sub-issues", "remove", "123", "456"},

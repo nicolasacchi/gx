@@ -60,6 +60,11 @@ Examples:
 		if len(bulkAddLabels) == 0 && len(bulkRemLabels) == 0 && bulkSetMilestone == "" {
 			return fmt.Errorf("specify at least one of --add-label, --remove-label, --set-milestone")
 		}
+		// Refuse an unscoped bulk edit: an empty filter resolves to the first 100
+		// open issues, so a stray invocation would rewrite live tickets en masse.
+		if len(bulkLabel) == 0 && bulkMilestone == "" {
+			return fmt.Errorf("bulk edit requires at least one selector: --label or --milestone")
+		}
 
 		var milestoneNum int
 		if bulkSetMilestone != "" {
@@ -74,7 +79,14 @@ Examples:
 			return err
 		}
 
-		fmt.Fprintf(os.Stderr, "bulk edit: %d issues\n", len(issues))
+		fmt.Fprintf(os.Stderr, "bulk edit: %d issues match (labels=%v milestone=%q)\n", len(issues), bulkLabel, bulkMilestone)
+		if dryRun() {
+			fmt.Fprintf(os.Stderr, "--dry-run: would edit %d issues, no changes made\n", len(issues))
+			return nil
+		}
+		if err := requireConfirm(fmt.Sprintf("editing %d issues", len(issues))); err != nil {
+			return err
+		}
 		var success, fail int
 		for _, num := range issues {
 			ok := true
@@ -120,13 +132,26 @@ Examples:
 		if err != nil {
 			return err
 		}
+		// Refuse an unscoped bulk close: with no filter, fetchFilteredIssues
+		// resolves to the first 100 open issues, so a stray `gx bulk close`
+		// would silently close up to 100 live tickets on Project #3.
+		if len(bulkLabel) == 0 && bulkMilestone == "" {
+			return fmt.Errorf("bulk close requires at least one selector: --label or --milestone")
+		}
 
 		issues, err := fetchFilteredIssues(c)
 		if err != nil {
 			return err
 		}
 
-		fmt.Fprintf(os.Stderr, "bulk close: %d issues\n", len(issues))
+		fmt.Fprintf(os.Stderr, "bulk close: %d issues match (labels=%v milestone=%q)\n", len(issues), bulkLabel, bulkMilestone)
+		if dryRun() {
+			fmt.Fprintf(os.Stderr, "--dry-run: would close %d issues, no changes made\n", len(issues))
+			return nil
+		}
+		if err := requireConfirm(fmt.Sprintf("closing %d issues", len(issues))); err != nil {
+			return err
+		}
 		body := map[string]any{"state": "closed"}
 		if bulkReason != "" {
 			body["state_reason"] = bulkReason
