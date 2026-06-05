@@ -62,6 +62,10 @@ Examples:
 		}
 		// Refuse an unscoped bulk edit: an empty filter resolves to the first 100
 		// open issues, so a stray invocation would rewrite live tickets en masse.
+		// Normalize first so a degenerate selector (--label " " or --label ",",
+		// which parse to a non-empty slice of blanks) can't slip past len().
+		bulkLabel = nonBlankLabels(bulkLabel)
+		bulkMilestone = strings.TrimSpace(bulkMilestone)
 		if len(bulkLabel) == 0 && bulkMilestone == "" {
 			return fmt.Errorf("bulk edit requires at least one selector: --label or --milestone")
 		}
@@ -135,6 +139,10 @@ Examples:
 		// Refuse an unscoped bulk close: with no filter, fetchFilteredIssues
 		// resolves to the first 100 open issues, so a stray `gx bulk close`
 		// would silently close up to 100 live tickets on Project #3.
+		// Normalize first so a degenerate selector (--label " " or --label ",",
+		// which parse to a non-empty slice of blanks) can't slip past len().
+		bulkLabel = nonBlankLabels(bulkLabel)
+		bulkMilestone = strings.TrimSpace(bulkMilestone)
 		if len(bulkLabel) == 0 && bulkMilestone == "" {
 			return fmt.Errorf("bulk close requires at least one selector: --label or --milestone")
 		}
@@ -170,6 +178,19 @@ Examples:
 		fmt.Fprintf(os.Stderr, "done: %d closed, %d failed\n", success, fail)
 		return nil
 	},
+}
+
+// nonBlankLabels trims each --label value and drops blank/whitespace-only
+// entries, so a degenerate selector can neither satisfy the selector guard nor
+// reach fetchFilteredIssues as an empty `labels=` element.
+func nonBlankLabels(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, l := range in {
+		if s := strings.TrimSpace(l); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func fetchFilteredIssues(c *client.Client) ([]int, error) {

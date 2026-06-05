@@ -118,3 +118,21 @@ func TestBulkClose_DryRunSendsNoMutation(t *testing.T) {
 		t.Fatal("--dry-run must not PATCH anything")
 	}
 }
+
+// TestBulkClose_BlankSelectorIsRefused: a degenerate selector (--label " " or
+// --label ",", which cobra parses to a non-empty slice of blanks) must be
+// treated as "no selector" and refused before any network call.
+func TestBulkClose_BlankSelectorIsRefused(t *testing.T) {
+	var rec []string
+	recordingServer(t, &rec)
+
+	for _, sel := range []string{" ", ","} {
+		_, err := runGx(t, "bulk", "close", "--label", sel, "--yes", "--token", "x", "--owner", "o", "--repo", "r")
+		if err == nil || !strings.Contains(err.Error(), "selector") {
+			t.Fatalf("--label %q should be refused as no selector, got %v", sel, err)
+		}
+	}
+	if len(rec) != 0 {
+		t.Fatalf("blank selectors must hit no network, got: %v", rec)
+	}
+}
