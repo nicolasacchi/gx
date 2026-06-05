@@ -56,7 +56,7 @@ func TestOverrideEndpoints(t *testing.T) {
 }
 
 func TestExitCode(t *testing.T) {
-	for status, want := range map[int]int{401: 3, 403: 3, 404: 4, 422: 1, 500: 1, 200: 1} {
+	for status, want := range map[int]int{401: 2, 403: 2, 400: 3, 404: 4, 429: 5, 422: 1, 500: 1, 200: 1} {
 		if got := (&APIError{StatusCode: status}).ExitCode(); got != want {
 			t.Errorf("ExitCode(%d)=%d want %d", status, got, want)
 		}

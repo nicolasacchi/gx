@@ -3,6 +3,8 @@ package client
 import (
 	"fmt"
 	"strings"
+
+	"github.com/nicolasacchi/clicore/cierrors"
 )
 
 // ValidationError is a single element of GitHub's REST `errors` array.
@@ -77,15 +79,8 @@ func validationDetail(v ValidationError) string {
 }
 
 // ExitCode returns the process exit code.
+// ExitCode delegates to the fleet-canonical table (auth=2, validation=3,
+// not_found=4, rate_limited=5, write_locked=6, async_timeout=7, else 1).
 func (e *APIError) ExitCode() int {
-	switch {
-	case e.Kind == "write_locked":
-		return 6 // refused for safety, not failed — matches the otx/stx write-gate contract
-	case e.StatusCode == 401 || e.StatusCode == 403:
-		return 3
-	case e.StatusCode == 404:
-		return 4
-	default:
-		return 1
-	}
+	return cierrors.ExitCodeFor(e.StatusCode, e.Kind)
 }
