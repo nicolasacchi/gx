@@ -1,8 +1,11 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nicolasacchi/gx/internal/client"
+	"net/url"
 	"os"
 	"strconv"
 )
@@ -85,6 +88,7 @@ func flattenIssues(data json.RawMessage) json.RawMessage {
 		return data
 	}
 
+	issues = dropPullRequests(issues)
 	fmt.Fprintf(os.Stderr, "issues: %d results\n", len(issues))
 
 	var flattened []map[string]any
@@ -107,4 +111,64 @@ func parseNumber(s string) (int, error) {
 		return 0, fmt.Errorf("invalid number: %s", s)
 	}
 	return n, nil
+}
+
+// isPullRequest reports whether a REST /issues element is really a pull request
+// (the issues endpoint returns PRs too; they carry a "pull_request" key).
+func isPullRequest(raw json.RawMessage) bool {
+	var probe struct {
+		PullRequest json.RawMessage `json:"pull_request"`
+	}
+	if json.Unmarshal(raw, &probe) != nil {
+		return false
+	}
+	return len(probe.PullRequest) > 0 && string(probe.PullRequest) != "null"
+}
+
+// dropPullRequests removes pull requests from a list of REST issue objects.
+func dropPullRequests(items []json.RawMessage) []json.RawMessage {
+	out := make([]json.RawMessage, 0, len(items))
+	for _, it := range items {
+		if !isPullRequest(it) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// listRealIssues pages through the REST issues endpoint, discarding pull
+// requests, until limit real issues are collected (limit <= 0 means all) or
+// the results run out. params must not contain page/per_page.
+func listRealIssues(c *client.Client, params url.Values, limit int) (json.RawMessage, error) {
+	perPage := 100
+	if limit > 0 && limit < perPage {
+		perPage = limit
+	}
+	const maxPages = 50
+	var collected []json.RawMessage
+	for page := 1; page <= maxPages; page++ {
+		q := url.Values{}
+		for k, v := range params {
+			q[k] = v
+		}
+		q.Set("per_page", strconv.Itoa(perPage))
+		q.Set("page", strconv.Itoa(page))
+		data, err := c.Get(context.Background(), "issues", q)
+		if err != nil {
+			return nil, err
+		}
+		var items []json.RawMessage
+		if err := json.Unmarshal(data, &items); err != nil {
+			return nil, fmt.Errorf("unexpected issues response: %w", err)
+		}
+		collected = append(collected, dropPullRequests(items)...)
+		if limit > 0 && len(collected) >= limit {
+			collected = collected[:limit]
+			break
+		}
+		if len(items) < perPage {
+			break
+		}
+	}
+	return json.Marshal(collected)
 }

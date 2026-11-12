@@ -127,7 +127,6 @@ var issuesListCmd = &cobra.Command{
 
 		params := url.Values{
 			"state":     {issueState},
-			"per_page":  {strconv.Itoa(limitFlag)},
 			"sort":      {"updated"},
 			"direction": {"desc"},
 		}
@@ -141,7 +140,7 @@ var issuesListCmd = &cobra.Command{
 			params.Set("assignee", issueAssignee)
 		}
 
-		data, err := c.Get(context.Background(), "issues", params)
+		data, err := listRealIssues(c, params, limitFlag)
 		if err != nil {
 			return err
 		}

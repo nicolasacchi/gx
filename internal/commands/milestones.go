@@ -223,9 +223,8 @@ var milestonesIssuesCmd = &cobra.Command{
 		params := url.Values{
 			"milestone": {args[0]},
 			"state":     {"all"},
-			"per_page":  {strconv.Itoa(limitFlag)},
 		}
-		data, err := c.Get(context.Background(), "issues", params)
+		data, err := listRealIssues(c, params, limitFlag)
 		if err != nil {
 			return err
 		}

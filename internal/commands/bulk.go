@@ -195,8 +195,7 @@ func nonBlankLabels(in []string) []string {
 
 func fetchFilteredIssues(c *client.Client) ([]int, error) {
 	params := url.Values{
-		"state":    {"open"},
-		"per_page": {"100"},
+		"state": {"open"},
 	}
 	if len(bulkLabel) > 0 {
 		params.Set("labels", strings.Join(bulkLabel, ","))
@@ -210,7 +209,9 @@ func fetchFilteredIssues(c *client.Client) ([]int, error) {
 		params.Set("milestone", fmt.Sprintf("%d", num))
 	}
 
-	data, err := c.Get(context.Background(), "issues", params)
+	// Pull requests are excluded and all pages are walked, so a bulk operation
+	// never touches PRs nor silently stops at the first 100 matches.
+	data, err := listRealIssues(c, params, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +219,9 @@ func fetchFilteredIssues(c *client.Client) ([]int, error) {
 	var issues []struct {
 		Number int `json:"number"`
 	}
-	json.Unmarshal(data, &issues)
+	if err := json.Unmarshal(data, &issues); err != nil {
+		return nil, fmt.Errorf("parse issues: %w", err)
+	}
 
 	nums := make([]int, len(issues))
 	for i, issue := range issues {
