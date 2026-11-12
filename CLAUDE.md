@@ -172,7 +172,7 @@ gx open 123
 | 5 | Rate limited (429) |
 | 6 | Write refused — confirmation required (`write_locked`); re-run with `--yes` |
 
-Fleet-canonical table (`clicore/cierrors.ExitCodeFor`). **Changed in this version:** auth was `3`, now `2`.
+Fleet-canonical table (`clicore/cierrors.ExitCodeFor`). Auth was `3` before v1.0.0-6 (2c24f5e), now `2`. `issues list`, `milestones issues` and `bulk` skip pull requests (v1.1.0). REST API version header: `2026-03-10`.
 
 ## Architecture
 
