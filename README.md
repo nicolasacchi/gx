@@ -66,7 +66,7 @@ gx overview
 
 | Group | Subcommands | API |
 |-------|-------------|-----|
-| `issues` | list, get, create, edit, close, reopen, assign, timeline, linked-prs, pin/unpin, lock/unlock | REST + GraphQL |
+| `issues` | list (issues only, PRs excluded), get, create, edit, close, reopen, assign, timeline, linked-prs, pin/unpin, lock/unlock | REST + GraphQL |
 | `sub-issues` | list, add, remove, reorder | **GraphQL** |
 | `milestones` | list, get, create, edit, close, reopen, issues | REST |
 | `iterations` | list, current | **GraphQL** |
