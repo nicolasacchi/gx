@@ -52,7 +52,7 @@ func (c *Client) Repo() string { return c.repo }
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("X-GitHub-Api-Version", "2026-03-10")
 	if req.Method == http.MethodPost || req.Method == http.MethodPatch || req.Method == http.MethodDelete {
 		req.Header.Set("Content-Type", "application/json")
 	}
